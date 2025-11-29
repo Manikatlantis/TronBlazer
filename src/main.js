@@ -19,7 +19,7 @@ let controls;
 let DEBUG_FREE_CAMERA = true; // to toggle for debugging
 let keys = { left: false, right: false };
 
-let forwardSpeed = 20;
+let forwardSpeed = 200;
 let lateralSpeed = 10;
 let travel = 0;
 
@@ -155,7 +155,7 @@ function loadArena() {
   const loader = new GLTFLoader();
 
   loader.load(
-    "/models/arena/scene.gltf",   // adjust if your folder/file name differs
+    "/models/arena3/scene.gltf",   // adjust if your folder/file name differs
     (gltf) => {
       arena = gltf.scene;
 
