@@ -8,6 +8,10 @@ import { metalness } from "three/tsl";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import './style.css'
 
+// SPAWN POINT
+const SPAWN_POS = new THREE.Vector3(0, 0.9, 2500);
+const SPAWN_ROT_Y = Math.PI * 0.5;   // face inward, for example
+
 const MAX_LEAN = 0.5;      // radians (~30°)
 const LEAN_SMOOTH = 0.04;  // 0–1, higher = snappier
 const TURN_SPEED  = Math.PI * 0.5;  // radians per second for left/right turning
@@ -16,10 +20,14 @@ let renderer, scene, camera, composer, clock;
 let bike;
 let bikeReady = false;
 let controls;
-let DEBUG_FREE_CAMERA = true; // to toggle for debugging
+let DEBUG_FREE_CAMERA = false; // to toggle for debugging
 let keys = { left: false, right: false };
+let crashMessageEl = null;
+let crashTitleEl = null;
+let crashSubtitleEl = null;
 
-let forwardSpeed = 100;
+
+let forwardSpeed = 200;
 let lateralSpeed = 10;
 let travel = 0;
 
@@ -27,8 +35,29 @@ let trailCoreMesh, trailHaloMesh;
 let trailMaterialCore, trailMaterialHalo;
 
 let trailMaterial, trailMesh;  // For the tron trail
-const MAX_TRAIL_POINTS = 1000;
+const MAX_TRAIL_POINTS = 500;
 const trailPositions = [];
+
+const GAME_STATE = {
+  WAITING: "WAITING",
+  PLAYING: "PLAYING",
+  CRASHED: "CRASHED",
+};
+
+let gameState = GAME_STATE.WAITING;
+let timeScale = 1.0;
+
+// for camera shake
+let crashTime = 0;
+let shakeIntensity = 0.0;
+
+// trail collision data (segments)
+const trailSegments = []; // { start: Vector3, end: Vector3 }
+const TRAIL_RADIUS = 0.9; // match-ish your visible radius
+
+// simple arena bounds for now (tweak to match your arena size)
+let ARENA_HALF_SIZE_X = 80;
+let ARENA_HALF_SIZE_Z = 80;
 
 
 window.addEventListener("keydown", (e) => {
@@ -39,6 +68,21 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "KeyC") {
     DEBUG_FREE_CAMERA = !DEBUG_FREE_CAMERA;
     console.log("DEBUG_FREE_CAMERA:", DEBUG_FREE_CAMERA);
+  }
+
+  // Start / restart with Q
+  if (e.code === "KeyQ") {
+    if (gameState === GAME_STATE.WAITING) {
+      startGame();
+    } else if (gameState === GAME_STATE.CRASHED) {
+      resetGame();
+      startGame();
+    }
+  }
+   // Restart after crash
+  if (e.code === "KeyR") {
+    console.log("R pressed, resetting. state was:", gameState);
+    resetGame();
   }
 });
 
@@ -91,6 +135,11 @@ function init() {
   const rimLight = new THREE.DirectionalLight(0xff6600, 2.0);
   rimLight.position.set(-5, 4, -5);
   scene.add(rimLight);
+  crashMessageEl = document.getElementById("crashMessage");
+  crashTitleEl     = document.getElementById("crashTitle");
+  crashSubtitleEl  = document.getElementById("crashSubtitle");
+
+  showReadyToStartMessage();  // show "Press Q" on first load
 
   // World
   loadArena();
@@ -137,7 +186,8 @@ function loadBike() {
       });
 
       bike.scale.set(1.0, 1.0, 1.0);      // tweak if too big/small
-      bike.position.set(0, 0.9, 0);
+      bike.position.copy(SPAWN_POS);
+      bike.rotation.set(0, SPAWN_ROT_Y, 0);
       scene.add(bike);
 
       bikeReady = true;
@@ -181,6 +231,15 @@ function loadArena() {
       arena.scale.set(25, 25, 25);    // tweak this
       arena.position.set(0, -1, 0); // tweak if needed
       scene.add(arena);
+      const box = new THREE.Box3().setFromObject(arena);
+      const size = new THREE.Vector3();
+      box.getSize(size);
+
+      // Half-size in X/Z, shrink a bit so you don't hit the exact visual edge
+      ARENA_HALF_SIZE_X = (size.x * 0.7) * 0.9;
+      ARENA_HALF_SIZE_Z = (size.z * 0.7) * 0.9;
+
+console.log("Arena bounds:", ARENA_HALF_SIZE_X, ARENA_HALF_SIZE_Z);
     },
     undefined,
     (err) => {
@@ -320,7 +379,19 @@ function updateTrail() {
   if (trailPositions.length > MAX_TRAIL_POINTS) {
     trailPositions.shift();
   }
+   // --- NEW: store line segments for collision ---
+  if (trailPositions.length >= 2) {
+    const len = trailPositions.length;
+    const start = trailPositions[len - 2].clone();
+    const end   = trailPositions[len - 1].clone();
+    trailSegments.push({ start, end });
 
+    // keep trail segments capped similarly
+    if (trailSegments.length > MAX_TRAIL_POINTS) {
+      trailSegments.shift();
+    }
+  }
+  // ---------------------------------------------
   if (trailPositions.length < 2) return;
 
   const curve = new THREE.CatmullRomCurve3(trailPositions);
@@ -366,6 +437,39 @@ function getTrailSamplePoint() {
   return sample;
 }
 
+function showOverlay() {
+  if (!crashMessageEl) return;
+  crashMessageEl.style.visibility = "visible";
+  crashMessageEl.classList.add("visible");
+}
+
+function hideOverlay() {
+  if (!crashMessageEl) return;
+  crashMessageEl.classList.remove("visible");
+  // small timeout to let opacity transition, then hide
+  setTimeout(() => {
+    if (!crashMessageEl.classList.contains("visible")) {
+      crashMessageEl.style.visibility = "hidden";
+    }
+  }, 350);
+}
+
+function showReadyToStartMessage() {
+  if (!crashMessageEl) return;
+  crashTitleEl.textContent = "Ready to Ride";
+  crashSubtitleEl.innerHTML = `Press <span class="key">Q</span> to start`;
+  showOverlay();
+}
+
+function showCrashMessage() {
+  if (!crashMessageEl) return;
+  crashTitleEl.textContent = "You Crashed!!";
+  crashSubtitleEl.innerHTML =
+    `Press <span class="key">R</span> to reset<br>` +
+    `or <span class="key">Q</span> to restart`;
+  showOverlay();
+}
+
 
 function onWindowResize() {
   const width = window.innerWidth;
@@ -378,84 +482,184 @@ function onWindowResize() {
   composer.setSize(width, height);
 }
 
+function hideCrashMessage() {
+  if (crashMessageEl) {
+    crashMessageEl.classList.remove("visible");
+  }
+}
+
+function distancePointToSegment(p, a, b) {
+  // p, a, b are Vector3
+  const ab = b.clone().sub(a);
+  const ap = p.clone().sub(a);
+  const abLenSq = ab.lengthSq();
+
+  if (abLenSq === 0) return ap.length(); // degenerate segment
+
+  let t = ap.dot(ab) / abLenSq;
+  t = THREE.MathUtils.clamp(t, 0, 1);
+
+  const closest = a.clone().addScaledVector(ab, t);
+  return closest.distanceTo(p);
+}
+
+function checkTrailCollision() {
+  if (trailSegments.length < 2) return false;
+
+  const bikePos = new THREE.Vector3();
+  bike.getWorldPosition(bikePos);
+
+  // Skip the last few segments so we don't immediately collide with ourselves
+  const skipLast = 10;
+  const limit = Math.max(0, trailSegments.length - skipLast);
+
+  for (let i = 0; i < limit; i++) {
+    const seg = trailSegments[i];
+    const d = distancePointToSegment(bikePos, seg.start, seg.end);
+    if (d < TRAIL_RADIUS * 0.9) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function checkWallCollision() {
+  const bikePos = new THREE.Vector3();
+  bike.getWorldPosition(bikePos);
+
+  return (
+    Math.abs(bikePos.x) > ARENA_HALF_SIZE_X ||
+    Math.abs(bikePos.z) > ARENA_HALF_SIZE_Z
+  );
+}
+
+function handleCollisions() {
+  if (gameState !== GAME_STATE.PLAYING) return;
+
+  if (checkTrailCollision() || checkWallCollision()) {
+    // trigger crash
+    gameState = GAME_STATE.CRASHED;
+    crashTime = clock.getElapsedTime();
+    timeScale = 0.2;         // slow motion
+    shakeIntensity = 0.8;    // how strong the shake is
+    showCrashMessage();  
+    console.log("CRASH!");
+  }
+}
+
+function resetGame() {
+  gameState = GAME_STATE.WAITING;
+  timeScale = 1.0;
+  shakeIntensity = 0.0;
+
+  DEBUG_FREE_CAMERA = false; // force back to game camera on reset
+
+  // clear trail data
+  trailPositions.length = 0;
+  trailSegments.length = 0;
+
+  if (trailMesh) {
+    trailMesh.geometry.dispose();
+    // recreate tiny starter tube
+    const p0 = bike.position.clone();
+    const p1 = bike.position.clone().add(new THREE.Vector3(0, 0, -1));
+    const curve = new THREE.CatmullRomCurve3([p0, p1]);
+    trailMesh.geometry = new THREE.TubeGeometry(curve, 32, 0.8, 24, false);
+  }
+  bike.position.copy(SPAWN_POS);
+  bike.rotation.set(0, SPAWN_ROT_Y, 0);
+
+  showReadyToStartMessage();   // back to "Press Q to start"
+}
+
+function startGame() {
+  gameState = GAME_STATE.PLAYING;
+  timeScale = 1.0;
+  hideOverlay();
+}
+
+
 function animate() {
   requestAnimationFrame(animate);
 
-  const dt = clock.getDelta();
-  const t = clock.getElapsedTime();
+  const rawDt = clock.getDelta();      // real delta since last frame
+  const gameDt = rawDt * timeScale;    // slowed during crash
+  const t = clock.getElapsedTime();    // total time
 
-    // drive the water-like ripple on the trail
+  // drive the water-like ripple on the trail
   if (trailMaterial && trailMaterial.uniforms && trailMaterial.uniforms.uTime) {
     trailMaterial.uniforms.uTime.value = t;
   }
 
   if (bikeReady && bike) {
-    // travel += forwardSpeed * dt;
-    // bike.position.z = -travel;
-    // --- MOVE & TURN ---
+    // 1. Turn left/right only while playing
+    let turnAmount = 0;
+    if (!DEBUG_FREE_CAMERA && gameState === GAME_STATE.PLAYING) {
+      if (keys.left)  turnAmount += TURN_SPEED * gameDt;
+      if (keys.right) turnAmount -= TURN_SPEED * gameDt;
+    }
+    bike.rotation.y += turnAmount;
 
-// 1. Turn based on left/right keys (no up/down movement yet)
-let turnAmount = 0;
-if (!DEBUG_FREE_CAMERA) {
-  if (keys.left)  turnAmount += TURN_SPEED * dt;
-  if (keys.right) turnAmount -= TURN_SPEED * dt;
-}
+    // 2. Constant forward movement
+    const forwardDir = new THREE.Vector3(0, 0, -1).applyQuaternion(bike.quaternion);
+    if (gameState === GAME_STATE.PLAYING) {
+      bike.position.addScaledVector(forwardDir, forwardSpeed * gameDt);
+    }
 
-// apply yaw rotation
-bike.rotation.y += turnAmount;
+    // 3. Hover effect
+    const baseY = 0.7;
+    bike.position.y = baseY + Math.sin(t * 2.0) * 0.05;
 
-// 2. Constant forward movement in whatever direction the bike faces
-//    (local -Z of the model is "forward" in three.js by convention)
-const forwardDir = new THREE.Vector3(0, 0, -1);
-forwardDir.applyQuaternion(bike.quaternion);
-bike.position.addScaledVector(forwardDir, forwardSpeed * dt);
+    // 4. Lean
+    let targetLean = 0;
+    if (!DEBUG_FREE_CAMERA) {
+      if (keys.left)  targetLean =  MAX_LEAN;
+      if (keys.right) targetLean = -MAX_LEAN;
+    }
+    bike.rotation.z = THREE.MathUtils.lerp(
+      bike.rotation.z,
+      targetLean,
+      LEAN_SMOOTH
+    );
 
-// 3. Hover effect at a fixed height (no manual up/down yet)
-const baseY = 0.7;
-bike.position.y = baseY + Math.sin(t * 2.0) * 0.05;
+    // 5. Trail & collisions only while playing
+    if (gameState === GAME_STATE.PLAYING) {
+      updateTrail();
+      handleCollisions();
+    }
 
-// 4. Lean based on steering input
-let targetLean = 0;
-if (!DEBUG_FREE_CAMERA) {
-  if (keys.left)  targetLean =  MAX_LEAN;   // lean left
-  if (keys.right) targetLean = -MAX_LEAN;   // lean right
-} else {
-  // in debug, auto-upright
-  targetLean = 0;
-}
-
-bike.rotation.z = THREE.MathUtils.lerp(
-  bike.rotation.z,
-  targetLean,
-  LEAN_SMOOTH
-);
-
-  updateTrail();
-
-  // CAMERA
+    // 6. Camera
     if (DEBUG_FREE_CAMERA) {
-      // Orbit mode around bike
       controls.target.copy(bike.position);
       controls.update();
     } else {
-      // Follow camera behind + above the bike
-      const camOffsetLocal = new THREE.Vector3(0, 7.5, 12);   // x,y,z offset from bike
+      const camOffsetLocal = new THREE.Vector3(0, 7.5, 12);
       const camOffsetWorld = camOffsetLocal.clone().applyQuaternion(bike.quaternion);
       const desiredPos = bike.position.clone().add(camOffsetWorld);
 
-      // Smooth follow
       camera.position.lerp(desiredPos, 0.12);
 
-      // Look slightly ahead of the bike into the forward direction
+      // Shake on crash
+      if (gameState === GAME_STATE.CRASHED) {
+        const tSinceCrash = clock.getElapsedTime() - crashTime;
+        const shake = shakeIntensity * Math.exp(-tSinceCrash * 2.0);
+        const randOffset = new THREE.Vector3(
+          (Math.random() - 0.5) * shake,
+          (Math.random() - 0.5) * shake,
+          (Math.random() - 0.5) * shake
+        );
+        camera.position.add(randOffset);
+      }
+
       const lookOffsetLocal = new THREE.Vector3(0, 1.5, -10);
       const lookOffsetWorld = lookOffsetLocal.clone().applyQuaternion(bike.quaternion);
       const lookTarget = bike.position.clone().add(lookOffsetWorld);
       camera.lookAt(lookTarget);
     }
   } else {
-    // Before bike loads, still keep tunnel alive
     if (DEBUG_FREE_CAMERA && controls) controls.update();
   }
 
   composer.render(scene, camera);
 }
+
