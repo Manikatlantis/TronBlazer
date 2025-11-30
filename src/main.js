@@ -27,7 +27,7 @@ let crashTitleEl = null;
 let crashSubtitleEl = null;
 
 
-let forwardSpeed = 200;
+let forwardSpeed = 100;
 let lateralSpeed = 10;
 let travel = 0;
 
@@ -125,16 +125,37 @@ function init() {
   controls.target.set(0, 0.7, 0);  // look at bike position
 
   // Lights
-  const ambient = new THREE.AmbientLight(0x050608, 0.4);
-  scene.add(ambient);
+  // const ambient = new THREE.AmbientLight(0x050608, 0.4);
+  // scene.add(ambient);
 
-  const keyLight = new THREE.DirectionalLight(0x66aaff, 1.5);
-  keyLight.position.set(10, 20, 10);
+  // const keyLight = new THREE.DirectionalLight(0x66aaff, 1.5);
+  // keyLight.position.set(10, 20, 10);
+  // scene.add(keyLight);
+
+  // const rimLight = new THREE.DirectionalLight(0xff6600, 2.0);
+  // rimLight.position.set(-5, 4, -5);
+  // scene.add(rimLight);
+  const hemiLight = new THREE.HemisphereLight(
+    0x0a2a33,   // sky color (deep teal)
+    0x020308,   // ground color (almost black)
+    0.35        // intensity (keep low)
+  );
+  scene.add(hemiLight);
+
+  // Teal key light from above/front to highlight track curves
+  const keyLight = new THREE.DirectionalLight(0x55ffee, 0.9);
+  keyLight.position.set(30, 50, 40);
+  keyLight.target.position.set(0, 0, 0);
   scene.add(keyLight);
+  scene.add(keyLight.target);
 
-  const rimLight = new THREE.DirectionalLight(0xff6600, 2.0);
-  rimLight.position.set(-5, 4, -5);
+  // Warm rim light from behind for hot outlines on the bike & edges
+  const rimLight = new THREE.DirectionalLight(0x33ddff, 0.5);
+  rimLight.position.set(-25, 20, -35);
+  rimLight.target.position.set(0, 0, 0);
   scene.add(rimLight);
+  scene.add(rimLight.target);
+
   crashMessageEl = document.getElementById("crashMessage");
   crashTitleEl     = document.getElementById("crashTitle");
   crashSubtitleEl  = document.getElementById("crashSubtitle");
@@ -202,6 +223,25 @@ function loadBike() {
 
 let arena;
 
+function addArenaRimLightsAtCorners() {
+  const height = 30; // how high above the arena the lights sit
+
+  const cornerPositions = [
+    [  ARENA_HALF_SIZE_X, height,  ARENA_HALF_SIZE_Z],
+    [ -ARENA_HALF_SIZE_X, height,  ARENA_HALF_SIZE_Z],
+    [  ARENA_HALF_SIZE_X, height, -ARENA_HALF_SIZE_Z],
+    [ -ARENA_HALF_SIZE_X, height, -ARENA_HALF_SIZE_Z],
+  ];
+
+  cornerPositions.forEach(([x, y, z]) => {
+    const light = new THREE.DirectionalLight(0x33ddff, 0.7); // teal, a bit brighter
+    light.position.set(x, y, z);
+    light.target.position.set(0, 0, 0);       // aim at center of arena
+    scene.add(light);
+    scene.add(light.target);
+  });
+}
+
 function loadArena() {
   const loader = new GLTFLoader();
 
@@ -239,7 +279,9 @@ function loadArena() {
       ARENA_HALF_SIZE_X = (size.x * 0.7) * 0.9;
       ARENA_HALF_SIZE_Z = (size.z * 0.7) * 0.9;
 
-console.log("Arena bounds:", ARENA_HALF_SIZE_X, ARENA_HALF_SIZE_Z);
+      console.log("Arena bounds:", ARENA_HALF_SIZE_X, ARENA_HALF_SIZE_Z);
+      // 🔵 add teal rim lights at the four corners
+      addArenaRimLightsAtCorners();
     },
     undefined,
     (err) => {
