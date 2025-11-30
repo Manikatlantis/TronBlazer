@@ -26,13 +26,9 @@ let crashMessageEl = null;
 let crashTitleEl = null;
 let crashSubtitleEl = null;
 
-
 let forwardSpeed = 100;
 let lateralSpeed = 10;
 let travel = 0;
-
-let trailCoreMesh, trailHaloMesh;
-let trailMaterialCore, trailMaterialHalo;
 
 let trailMaterial, trailMesh;  // For the tron trail
 const MAX_TRAIL_POINTS = 500;
@@ -55,7 +51,7 @@ let shakeIntensity = 0.0;
 const trailSegments = []; // { start: Vector3, end: Vector3 }
 const TRAIL_RADIUS = 0.9; // match-ish your visible radius
 
-// simple arena bounds for now (tweak to match your arena size)
+// simple arena bounds for now 
 let ARENA_HALF_SIZE_X = 80;
 let ARENA_HALF_SIZE_Z = 80;
 
@@ -124,17 +120,6 @@ function init() {
   controls.enableDamping = true;
   controls.target.set(0, 0.7, 0);  // look at bike position
 
-  // Lights
-  // const ambient = new THREE.AmbientLight(0x050608, 0.4);
-  // scene.add(ambient);
-
-  // const keyLight = new THREE.DirectionalLight(0x66aaff, 1.5);
-  // keyLight.position.set(10, 20, 10);
-  // scene.add(keyLight);
-
-  // const rimLight = new THREE.DirectionalLight(0xff6600, 2.0);
-  // rimLight.position.set(-5, 4, -5);
-  // scene.add(rimLight);
   const hemiLight = new THREE.HemisphereLight(
     0x0a2a33,   // sky color (deep teal)
     0x020308,   // ground color (almost black)
@@ -143,13 +128,13 @@ function init() {
   scene.add(hemiLight);
 
   // Teal key light from above/front to highlight track curves
-  const keyLight = new THREE.DirectionalLight(0x55ffee, 0.9);
+  const keyLight = new THREE.DirectionalLight(0x55ffee, 0.5);
   keyLight.position.set(30, 50, 40);
   keyLight.target.position.set(0, 0, 0);
   scene.add(keyLight);
   scene.add(keyLight.target);
 
-  // Warm rim light from behind for hot outlines on the bike & edges
+  // teal rim light from behind - outlines on the bike & edges
   const rimLight = new THREE.DirectionalLight(0x33ddff, 0.5);
   rimLight.position.set(-25, 20, -35);
   rimLight.target.position.set(0, 0, 0);
@@ -234,7 +219,7 @@ function addArenaRimLightsAtCorners() {
   ];
 
   cornerPositions.forEach(([x, y, z]) => {
-    const light = new THREE.DirectionalLight(0x33ddff, 0.7); // teal, a bit brighter
+    const light = new THREE.DirectionalLight(0x33ddff, 0.5); // teal, a bit brighter
     light.position.set(x, y, z);
     light.target.position.set(0, 0, 0);       // aim at center of arena
     scene.add(light);
@@ -522,12 +507,6 @@ function onWindowResize() {
 
   renderer.setSize(width, height);
   composer.setSize(width, height);
-}
-
-function hideCrashMessage() {
-  if (crashMessageEl) {
-    crashMessageEl.classList.remove("visible");
-  }
 }
 
 function distancePointToSegment(p, a, b) {
