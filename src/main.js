@@ -19,7 +19,7 @@ let controls;
 let DEBUG_FREE_CAMERA = true; // to toggle for debugging
 let keys = { left: false, right: false };
 
-let forwardSpeed = 200;
+let forwardSpeed = 100;
 let lateralSpeed = 10;
 let travel = 0;
 
@@ -118,6 +118,7 @@ function loadBike() {
 
   loader.load(
     "/models/lightcycle.glb",
+    // "/models/attack_helicopter_concept.glb",
     (gltf) => {
       bike = gltf.scene;
 
@@ -155,7 +156,7 @@ function loadArena() {
   const loader = new GLTFLoader();
 
   loader.load(
-    "/models/arena3/scene.gltf",   // adjust if your folder/file name differs
+    "/models/arena2/scene.gltf",   // adjust if your folder/file name differs
     (gltf) => {
       arena = gltf.scene;
 
