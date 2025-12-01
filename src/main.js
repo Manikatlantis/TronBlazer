@@ -6,6 +6,7 @@ import { Reflector } from "three/examples/jsm/objects/Reflector.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { metalness } from "three/tsl";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { tracks } from "./tracks.js";
 import './style.css'
 
 // SPAWN POINT
@@ -26,12 +27,17 @@ let crashMessageEl = null;
 let crashTitleEl = null;
 let crashSubtitleEl = null;
 
-let forwardSpeed = 100;
-let lateralSpeed = 10;
-let travel = 0;
+let forwardSpeed = 400;
+const currentTrack = tracks.arena1;
+
+const TRACK_HALF_WIDTH = currentTrack.halfWidth;
+
+const trackPoints = currentTrack.points.map(
+  ([x, z]) => new THREE.Vector2(x, z)
+);
 
 let trailMaterial, trailMesh;  // For the tron trail
-const MAX_TRAIL_POINTS = 500;
+const MAX_TRAIL_POINTS = 1000;
 const trailPositions = [];
 
 const GAME_STATE = {
@@ -39,6 +45,23 @@ const GAME_STATE = {
   PLAYING: "PLAYING",
   CRASHED: "CRASHED",
 };
+
+// Build 2D segments from your centerline points (XZ plane)
+const trackSegments2D = [];
+for (let i = 0; i < trackPoints.length - 1; i++) {
+  const a = trackPoints[i].clone();     // Vector2
+  const b = trackPoints[i + 1].clone(); // Vector2
+  const ab = b.clone().sub(a);
+  const lenSq = ab.lengthSq();
+
+  if (lenSq > 0.0001) {
+    trackSegments2D.push({ a, b, ab, lenSq });
+  }
+}
+
+// Track parameters
+// const TRACK_HALF_WIDTH = 50;   // how “wide” the drivable lane is
+const BOUNCE_STRENGTH   = 0.3;// how strongly it pushes/reflects
 
 let gameState = GAME_STATE.WAITING;
 let timeScale = 1.0;
@@ -64,6 +87,11 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "KeyC") {
     DEBUG_FREE_CAMERA = !DEBUG_FREE_CAMERA;
     console.log("DEBUG_FREE_CAMERA:", DEBUG_FREE_CAMERA);
+  }
+
+  // To get the position of the bike temporarily
+  if (e.code === "KeyP") {
+    console.log(bike.position.x.toFixed(1), bike.position.z.toFixed(1));
   }
 
   // Start / restart with Q
@@ -418,7 +446,7 @@ function updateTrail() {
       trailSegments.shift();
     }
   }
-  // ---------------------------------------------
+
   if (trailPositions.length < 2) return;
 
   const curve = new THREE.CatmullRomCurve3(trailPositions);
@@ -554,6 +582,50 @@ function checkWallCollision() {
   );
 }
 
+function applyTrackBounce() {
+  if (!bike || trackSegments2D.length === 0) return;
+
+  const p = new THREE.Vector2(bike.position.x, bike.position.z);
+
+  let minDist = Infinity;
+  let closestDelta = null;
+
+  for (const seg of trackSegments2D) {
+    const { a, ab, lenSq } = seg;
+    const ap = p.clone().sub(a);
+    let t = ap.dot(ab) / lenSq;
+    t = THREE.MathUtils.clamp(t, 0, 1);
+
+    const closest = a.clone().add(ab.clone().multiplyScalar(t));
+    const delta = p.clone().sub(closest);
+    const dist = delta.length();
+
+    if (dist < minDist) {
+      minDist = dist;
+      closestDelta = delta;
+    }
+  }
+
+  if (!closestDelta) return;
+
+  // still inside lane → no bounce
+  if (minDist <= TRACK_HALF_WIDTH) return;
+
+  const overshoot = minDist - TRACK_HALF_WIDTH;
+  const pushDir = closestDelta.normalize(); // outward
+  const correction = pushDir.multiplyScalar(
+    overshoot * (1.0 + BOUNCE_STRENGTH)
+  );
+
+  // move back inward
+  p.sub(correction);
+
+  bike.position.x = p.x;
+  bike.position.z = p.y;
+
+}
+
+
 function handleCollisions() {
   if (gameState !== GAME_STATE.PLAYING) return;
 
@@ -625,6 +697,8 @@ function animate() {
     const forwardDir = new THREE.Vector3(0, 0, -1).applyQuaternion(bike.quaternion);
     if (gameState === GAME_STATE.PLAYING) {
       bike.position.addScaledVector(forwardDir, forwardSpeed * gameDt);
+       // Apply track-edge bounce after moving
+      applyTrackBounce();
     }
 
     // 3. Hover effect
