@@ -26,18 +26,64 @@ let keys = { left: false, right: false };
 let crashMessageEl = null;
 let crashTitleEl = null;
 let crashSubtitleEl = null;
+let forwardSpeed = 300;
 
-let forwardSpeed = 400;
+// Track parameters
 const currentTrack = tracks.arena1;
-
+const BOUNCE_STRENGTH   = 0.3;// how strongly it pushes/reflects
 const TRACK_HALF_WIDTH = currentTrack.halfWidth;
 
+const CAMERA_MODE = {
+  CHASE: "CHASE",
+  CINEMATIC: "CINEMATIC",
+};
+
+const CINEMATIC_SHOTS = [
+  {
+    name: "lowChase",
+    duration: 4,
+    offset: new THREE.Vector3(0, 3, 10),       // behind + slightly above
+    lookOffset: new THREE.Vector3(0, 1.5, -8),
+    fov: 72,
+    lerp: 0.16,
+  },
+  {
+    name: "sideClose",
+    duration: 4,
+    offset: new THREE.Vector3(10, 2, 2),       // right side
+    lookOffset: new THREE.Vector3(0, 1.8, -6),
+    fov: 60,
+    lerp: 0.12,
+  },
+  {
+    name: "frontLow",
+    duration: 4,
+    offset: new THREE.Vector3(0, 2.5, -9),     // in front of bike
+    lookOffset: new THREE.Vector3(0, 2.0, 0),  // look back at it
+    fov: 58,
+    lerp: 0.10,
+  },
+  {
+    name: "highFar",
+    duration: 5,
+    offset: new THREE.Vector3(0, 24, 35),      // high crane shot
+    lookOffset: new THREE.Vector3(0, 2.0, -12),
+    fov: 50,
+    lerp: 0.06,
+  },
+];
+
+let currentShotIndex = 0;
+let currentShot = null;
+let shotStartTime = 0;
+
+let cameraMode = CAMERA_MODE.CHASE;
 const trackPoints = currentTrack.points.map(
   ([x, z]) => new THREE.Vector2(x, z)
 );
 
 let trailMaterial, trailMesh;  // For the tron trail
-const MAX_TRAIL_POINTS = 1000;
+const MAX_TRAIL_POINTS = 400;
 const trailPositions = [];
 
 const GAME_STATE = {
@@ -59,10 +105,6 @@ for (let i = 0; i < trackPoints.length - 1; i++) {
   }
 }
 
-// Track parameters
-// const TRACK_HALF_WIDTH = 50;   // how “wide” the drivable lane is
-const BOUNCE_STRENGTH   = 0.3;// how strongly it pushes/reflects
-
 let gameState = GAME_STATE.WAITING;
 let timeScale = 1.0;
 
@@ -78,6 +120,22 @@ const TRAIL_RADIUS = 0.9; // match-ish your visible radius
 let ARENA_HALF_SIZE_X = 80;
 let ARENA_HALF_SIZE_Z = 80;
 
+// ===== START/FINISH GATE CONFIG =====
+let startGateMesh;
+let lapCount = 0;
+let lastGateDot = null;
+
+const p0 = trackPoints[0];          // Vector2
+const p1 = trackPoints[1];          // Vector2
+
+// direction along the track near spawn (XZ)
+const startDir2D   = p1.clone().sub(p0).normalize();
+// normal pointing across the track
+const startNorm2D  = new THREE.Vector2(-startDir2D.x, startDir2D.y);
+
+// 3D versions
+const START_GATE_POS    = new THREE.Vector3(p0.x, 0, p0.y);
+const START_GATE_NORMAL = new THREE.Vector3(startNorm2D.x, 0, startNorm2D.y);
 
 window.addEventListener("keydown", (e) => {
   if (e.code === "ArrowLeft" || e.code === "KeyA") keys.left = true;
@@ -87,6 +145,15 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "KeyC") {
     DEBUG_FREE_CAMERA = !DEBUG_FREE_CAMERA;
     console.log("DEBUG_FREE_CAMERA:", DEBUG_FREE_CAMERA);
+  }
+
+   // Toggle cinematic vs chase with V
+  if (e.code === "KeyV") {
+    cameraMode =
+      cameraMode === CAMERA_MODE.CHASE
+        ? CAMERA_MODE.CINEMATIC
+        : CAMERA_MODE.CHASE;
+    console.log("Camera mode:", cameraMode);
   }
 
   // To get the position of the bike temporarily
@@ -178,6 +245,9 @@ function init() {
   // World
   loadArena();
   loadBike();
+
+  createStartGate();
+  console.log("Start gate at:", START_GATE_POS);
 
   // Postprocessing – bloom
   const renderScene = new RenderPass(scene, camera);
@@ -572,6 +642,72 @@ function checkTrailCollision() {
   return false;
 }
 
+function createStartGate() {
+  const gateWidth     = TRACK_HALF_WIDTH * 2.25;  // a bit wider than lane
+  const gateHeight    = 50;
+  const gateThickness = 0.5;
+
+  const geom = new THREE.BoxGeometry(gateWidth, gateHeight, gateThickness);
+
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x33aa99,
+    emissive: 0x33aa99,
+    emissiveIntensity: 3.0,
+    transparent: true,
+    opacity: 0.05,
+    roughness: 0.1,
+    metalness: 0.8,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+
+  startGateMesh = new THREE.Mesh(geom, mat);
+
+  // center on track & lift up
+  startGateMesh.position.copy(START_GATE_POS);
+  startGateMesh.position.y = gateHeight * 0.5;
+  startGateMesh.position.z += 3;  // or -10 depending on your direction
+
+
+  const yaw = Math.atan2(startDir2D.x, startDir2D.y); // XZ → angle around Y
+  startGateMesh.rotation.set(0, yaw, 0);              // upright, no banking
+
+  scene.add(startGateMesh);
+}
+
+function updateLaps() {
+  if (!bike || gameState !== GAME_STATE.PLAYING) return;
+
+  const bikePos = new THREE.Vector3();
+  bike.getWorldPosition(bikePos);
+
+  // signed distance to the start plane
+  const rel = bikePos.clone().sub(START_GATE_POS);
+  const dot = rel.dot(START_GATE_NORMAL); // <0 one side, >0 the other
+
+  if (lastGateDot === null) {
+    lastGateDot = dot;
+    return;
+  }
+
+  // only count when going "forward" across line: negative -> positive
+  if (lastGateDot < 0 && dot >= 0) {
+    // make sure we're actually near the center of the lane
+    const lateralOffset = Math.abs(rel.clone()
+      .sub(START_GATE_NORMAL.clone().multiplyScalar(dot)) // remove normal component
+      .length());
+
+    if (lateralOffset < TRACK_HALF_WIDTH * 1.2) {
+      lapCount++;
+      console.log("Lap:", lapCount);
+      flashStartGate();
+    }
+  }
+
+  lastGateDot = dot;
+}
+
 function checkWallCollision() {
   const bikePos = new THREE.Vector3();
   bike.getWorldPosition(bikePos);
@@ -650,6 +786,8 @@ function resetGame() {
   // clear trail data
   trailPositions.length = 0;
   trailSegments.length = 0;
+  lapCount = 0;
+  lastGateDot = null;
 
   if (trailMesh) {
     trailMesh.geometry.dispose();
@@ -663,6 +801,67 @@ function resetGame() {
   bike.rotation.set(0, SPAWN_ROT_Y, 0);
 
   showReadyToStartMessage();   // back to "Press Q to start"
+}
+
+function flashStartGate() {
+  if (!startGateMesh) return;
+  const mat = startGateMesh.material;
+  const originalIntensity = mat.emissiveIntensity;
+
+  mat.emissiveIntensity = 6.0;
+  mat.opacity = 0.5;
+
+  setTimeout(() => {
+    mat.emissiveIntensity = originalIntensity;
+    mat.opacity = 0.25;
+  }, 200);
+}
+
+function pickNextShot(t) {
+  const prev = currentShotIndex;
+  let idx = prev;
+
+  // make sure we don't pick the same shot twice in a row
+  while (idx === prev) {
+    idx = Math.floor(Math.random() * CINEMATIC_SHOTS.length);
+  }
+
+  currentShotIndex = idx;
+  currentShot = CINEMATIC_SHOTS[idx];
+  shotStartTime = t;
+  // console.log("Cinematic shot:", currentShot.name);
+}
+
+function getCinematicRig(t) {
+  if (!currentShot) {
+    pickNextShot(t);
+  }
+
+  // time to cut to a new camera?
+  if (t - shotStartTime > currentShot.duration) {
+    pickNextShot(t);
+  }
+
+  const offsetLocal = currentShot.offset.clone();
+  const lookOffsetLocal = currentShot.lookOffset.clone();
+
+  // small “handheld” wobble so it feels alive
+  const wobble = 0.7;
+  offsetLocal.x += Math.sin(t * 0.9) * wobble;
+  offsetLocal.y += Math.sin(t * 1.3) * wobble * 0.4;
+
+  const offsetWorld = offsetLocal.clone().applyQuaternion(bike.quaternion);
+  const desiredPos = bike.position.clone().add(offsetWorld);
+
+  const lookOffsetWorld = lookOffsetLocal
+    .clone()
+    .applyQuaternion(bike.quaternion);
+  const lookTarget = bike.position.clone().add(lookOffsetWorld);
+
+  const lerpFactor = currentShot.lerp ?? 0.1;
+  const targetFov = currentShot.fov ?? 60;
+
+  return { desiredPos, lookTarget, lerpFactor, targetFov };
 }
 
 function startGame() {
@@ -697,7 +896,7 @@ function animate() {
     const forwardDir = new THREE.Vector3(0, 0, -1).applyQuaternion(bike.quaternion);
     if (gameState === GAME_STATE.PLAYING) {
       bike.position.addScaledVector(forwardDir, forwardSpeed * gameDt);
-       // Apply track-edge bounce after moving
+      // Apply track-edge bounce after moving
       applyTrackBounce();
     }
 
@@ -720,21 +919,44 @@ function animate() {
     // 5. Trail & collisions only while playing
     if (gameState === GAME_STATE.PLAYING) {
       updateTrail();
+      updateLaps();
       handleCollisions();
     }
 
     // 6. Camera
+        // 6. Camera
     if (DEBUG_FREE_CAMERA) {
       controls.target.copy(bike.position);
       controls.update();
     } else {
-      const camOffsetLocal = new THREE.Vector3(0, 7.5, 12);
-      const camOffsetWorld = camOffsetLocal.clone().applyQuaternion(bike.quaternion);
-      const desiredPos = bike.position.clone().add(camOffsetWorld);
+      let desiredPos, lookTarget, lerpFactor, targetFov;
 
-      camera.position.lerp(desiredPos, 0.12);
+      if (cameraMode === CAMERA_MODE.CHASE) {
+        // --- normal chase camera (your original one) ---
+        const camOffsetLocal = new THREE.Vector3(0, 7.5, 12);
+        const camOffsetWorld = camOffsetLocal
+          .clone()
+          .applyQuaternion(bike.quaternion);
+        desiredPos = bike.position.clone().add(camOffsetWorld);
 
-      // Shake on crash
+        const lookOffsetLocal = new THREE.Vector3(0, 1.5, -10);
+        const lookOffsetWorld = lookOffsetLocal
+          .clone()
+          .applyQuaternion(bike.quaternion);
+        lookTarget = bike.position.clone().add(lookOffsetWorld);
+
+        lerpFactor = 0.12;
+        targetFov = 70;
+      } else {
+        // --- cinematic mode: dynamically changing rigs ---
+        const rig = getCinematicRig(t);
+        desiredPos = rig.desiredPos;
+        lookTarget = rig.lookTarget;
+        lerpFactor = rig.lerpFactor;
+        targetFov = rig.targetFov;
+      }
+
+      // Crash shake in both modes
       if (gameState === GAME_STATE.CRASHED) {
         const tSinceCrash = clock.getElapsedTime() - crashTime;
         const shake = shakeIntensity * Math.exp(-tSinceCrash * 2.0);
@@ -743,18 +965,18 @@ function animate() {
           (Math.random() - 0.5) * shake,
           (Math.random() - 0.5) * shake
         );
-        camera.position.add(randOffset);
+        desiredPos.add(randOffset);
       }
 
-      const lookOffsetLocal = new THREE.Vector3(0, 1.5, -10);
-      const lookOffsetWorld = lookOffsetLocal.clone().applyQuaternion(bike.quaternion);
-      const lookTarget = bike.position.clone().add(lookOffsetWorld);
+      camera.position.lerp(desiredPos, lerpFactor);
+      camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, 0.05);
+      camera.updateProjectionMatrix();
       camera.lookAt(lookTarget);
     }
+
   } else {
     if (DEBUG_FREE_CAMERA && controls) controls.update();
   }
 
   composer.render(scene, camera);
 }
-

@@ -19,7 +19,7 @@ console.log("arena1 points:", points.length, points[0], points[points.length - 1
 // ✅ this is what main.js is trying to import
 export const tracks = {
   arena1: {
-    halfWidth: 50,  // tweak this width as you like
+    halfWidth: 44,  // tweak this width as you like
     points,
   },
 };
