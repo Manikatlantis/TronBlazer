@@ -2,7 +2,6 @@ import * as THREE from "three";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import { Reflector } from "three/examples/jsm/objects/Reflector.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { metalness } from "three/tsl";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -37,45 +36,7 @@ const CAMERA_MODE = {
   CHASE: "CHASE",
   CINEMATIC: "CINEMATIC",
 };
-
-const CINEMATIC_SHOTS = [
-  {
-    name: "lowChase",
-    duration: 4,
-    offset: new THREE.Vector3(0, 3, 10),       // behind + slightly above
-    lookOffset: new THREE.Vector3(0, 1.5, -8),
-    fov: 72,
-    lerp: 0.16,
-  },
-  {
-    name: "sideClose",
-    duration: 4,
-    offset: new THREE.Vector3(10, 2, 2),       // right side
-    lookOffset: new THREE.Vector3(0, 1.8, -6),
-    fov: 60,
-    lerp: 0.12,
-  },
-  {
-    name: "frontLow",
-    duration: 4,
-    offset: new THREE.Vector3(0, 2.5, -9),     // in front of bike
-    lookOffset: new THREE.Vector3(0, 2.0, 0),  // look back at it
-    fov: 58,
-    lerp: 0.10,
-  },
-  {
-    name: "highFar",
-    duration: 5,
-    offset: new THREE.Vector3(0, 24, 35),      // high crane shot
-    lookOffset: new THREE.Vector3(0, 2.0, -12),
-    fov: 50,
-    lerp: 0.06,
-  },
-];
-
-let currentShotIndex = 0;
-let currentShot = null;
-let shotStartTime = 0;
+let cinematicTime = 0;
 
 let cameraMode = CAMERA_MODE.CHASE;
 const trackPoints = currentTrack.points.map(
@@ -83,7 +44,7 @@ const trackPoints = currentTrack.points.map(
 );
 
 let trailMaterial, trailMesh;  // For the tron trail
-const MAX_TRAIL_POINTS = 400;
+const MAX_TRAIL_POINTS = 200;
 const trailPositions = [];
 
 const GAME_STATE = {
@@ -253,8 +214,8 @@ function init() {
   const renderScene = new RenderPass(scene, camera);
   const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(width, height),
-    0.7,
-    0.4,
+    0.5,
+    0.2,
     0.2
   );
 
@@ -363,7 +324,7 @@ function loadArena() {
       ARENA_HALF_SIZE_Z = (size.z * 0.7) * 0.9;
 
       console.log("Arena bounds:", ARENA_HALF_SIZE_X, ARENA_HALF_SIZE_Z);
-      // 🔵 add teal rim lights at the four corners
+      // teal rim lights at the four corners
       addArenaRimLightsAtCorners();
     },
     undefined,
@@ -378,8 +339,8 @@ function createTrail() {
   trailMaterial = new THREE.ShaderMaterial({
     uniforms: {
       uTime:      { value: 0.0 },
-      uColorCore: { value: new THREE.Color(0xfff9a0) }, // bright inner glow
-      uColorEdge: { value: new THREE.Color(0xff6600) }, // red/orange edges
+      uColorCore: { value: new THREE.Color(0xff5503) }, // bright inner glow
+      uColorEdge: { value: new THREE.Color(0xff5503) }, // red/orange edges
       uOpacity:   { value: 0.5 },
       uFadePower:   { value: 1.5 },   // controls how quickly the tail disappears
     },
@@ -445,9 +406,9 @@ function createTrail() {
   // Alpha: mostly transparent center, solid edges + halo
   float alpha =
       uOpacity * (
-        coreBand * coreAlphaMask * 0.35 +  // watery center
-        edgeBand * 0.55 +                  // strong edges
-        fresnel  * 0.35                    // extra halo at grazing angles
+        coreBand * coreAlphaMask * 0.95 +  // watery center
+        edgeBand * 0.95 +                  // strong edges
+        fresnel  * 0.25                    // extra halo at grazing angles
       );
 
    // === Fade by "age" along the trail (tail dissolves) ===
@@ -817,59 +778,11 @@ function flashStartGate() {
   }, 200);
 }
 
-function pickNextShot(t) {
-  const prev = currentShotIndex;
-  let idx = prev;
-
-  // make sure we don't pick the same shot twice in a row
-  while (idx === prev) {
-    idx = Math.floor(Math.random() * CINEMATIC_SHOTS.length);
-  }
-
-  currentShotIndex = idx;
-  currentShot = CINEMATIC_SHOTS[idx];
-  shotStartTime = t;
-  // console.log("Cinematic shot:", currentShot.name);
-}
-
-function getCinematicRig(t) {
-  if (!currentShot) {
-    pickNextShot(t);
-  }
-
-  // time to cut to a new camera?
-  if (t - shotStartTime > currentShot.duration) {
-    pickNextShot(t);
-  }
-
-  const offsetLocal = currentShot.offset.clone();
-  const lookOffsetLocal = currentShot.lookOffset.clone();
-
-  // small “handheld” wobble so it feels alive
-  const wobble = 0.7;
-  offsetLocal.x += Math.sin(t * 0.9) * wobble;
-  offsetLocal.y += Math.sin(t * 1.3) * wobble * 0.4;
-
-  const offsetWorld = offsetLocal.clone().applyQuaternion(bike.quaternion);
-  const desiredPos = bike.position.clone().add(offsetWorld);
-
-  const lookOffsetWorld = lookOffsetLocal
-    .clone()
-    .applyQuaternion(bike.quaternion);
-  const lookTarget = bike.position.clone().add(lookOffsetWorld);
-
-  const lerpFactor = currentShot.lerp ?? 0.1;
-  const targetFov = currentShot.fov ?? 60;
-
-  return { desiredPos, lookTarget, lerpFactor, targetFov };
-}
-
 function startGame() {
   gameState = GAME_STATE.PLAYING;
   timeScale = 1.0;
   hideOverlay();
 }
-
 
 function animate() {
   requestAnimationFrame(animate);
@@ -877,6 +790,7 @@ function animate() {
   const rawDt = clock.getDelta();      // real delta since last frame
   const gameDt = rawDt * timeScale;    // slowed during crash
   const t = clock.getElapsedTime();    // total time
+  cinematicTime += rawDt;              // drives cinematic camera motion
 
   // drive the water-like ripple on the trail
   if (trailMaterial && trailMaterial.uniforms && trailMaterial.uniforms.uTime) {
@@ -924,7 +838,6 @@ function animate() {
     }
 
     // 6. Camera
-        // 6. Camera
     if (DEBUG_FREE_CAMERA) {
       controls.target.copy(bike.position);
       controls.update();
@@ -932,7 +845,7 @@ function animate() {
       let desiredPos, lookTarget, lerpFactor, targetFov;
 
       if (cameraMode === CAMERA_MODE.CHASE) {
-        // --- normal chase camera (your original one) ---
+        // --- Normal chase camera (kept as-is) ---
         const camOffsetLocal = new THREE.Vector3(0, 7.5, 12);
         const camOffsetWorld = camOffsetLocal
           .clone()
@@ -946,14 +859,40 @@ function animate() {
         lookTarget = bike.position.clone().add(lookOffsetWorld);
 
         lerpFactor = 0.12;
-        targetFov = 70;
+        targetFov = 50;
       } else {
-        // --- cinematic mode: dynamically changing rigs ---
-        const rig = getCinematicRig(t);
-        desiredPos = rig.desiredPos;
-        lookTarget = rig.lookTarget;
-        lerpFactor = rig.lerpFactor;
-        targetFov = rig.targetFov;
+        // --- CINEMATIC MODE: smooth orbit, only front/side views ---
+
+        // phase drives where the camera is on the front semicircle
+        const phase = cinematicTime * 0.25;       // slow drift
+        const swing = Math.sin(phase);            // [-1, 1]
+        const angle = swing * (Math.PI * 0.55);   // ~[-81°, +81°] around FRONT
+
+        // distance & height change slowly for dolly/crane feel
+        const baseRadius = 18;
+        const radius = baseRadius + 4 * Math.sin(phase * 0.7 + 1.0);
+        const height = 10 + 2 * Math.sin(phase * 1.3 + 0.5);
+
+        // NOTE: -Z is "in front" of the bike in its local space
+        const offsetLocal = new THREE.Vector3(
+          Math.sin(angle) * radius,   // side swing (left/right)
+          height,                     // crane up/down
+          -Math.cos(angle) * radius   // always in front hemisphere
+        );
+
+        const offsetWorld = offsetLocal.clone().applyQuaternion(bike.quaternion);
+        desiredPos = bike.position.clone().add(offsetWorld);
+
+        // the camera *focuses* a bit ahead of the bike, so it feels like
+        // a stationary point the bike passes through
+        const lookOffsetLocal = new THREE.Vector3(0, 2.0, -3);
+        const lookOffsetWorld = lookOffsetLocal
+          .clone()
+          .applyQuaternion(bike.quaternion);
+        lookTarget = bike.position.clone().add(lookOffsetWorld);
+
+        lerpFactor = 0.08;                      // smoother, weighty motion
+        targetFov = 90 + 8 * Math.sin(phase * 0.8);  // gentle FOV breathing
       }
 
       // Crash shake in both modes
@@ -973,7 +912,6 @@ function animate() {
       camera.updateProjectionMatrix();
       camera.lookAt(lookTarget);
     }
-
   } else {
     if (DEBUG_FREE_CAMERA && controls) controls.update();
   }
