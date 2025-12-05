@@ -27,6 +27,11 @@ let crashTitleEl = null;
 let crashSubtitleEl = null;
 let forwardSpeed = 800;
 let lastGateSide = null;
+let countdownStep = -1;
+let countdownTimer = 0;
+let countdownSprite = null;
+let countdownSpritePhase = 0;
+let countdownSpriteBaseScale = 45;
 
 // Track parameters
 const currentTrack = tracks.arena1;
@@ -50,6 +55,7 @@ const trailPositions = [];
 
 const GAME_STATE = {
   WAITING: "WAITING",
+  COUNTDOWN: "COUNTDOWN",
   PLAYING: "PLAYING",
   CRASHED: "CRASHED",
 };
@@ -93,7 +99,7 @@ let lastLapCrossTime = 0;
 const LAP_COOLDOWN = 0.8; // seconds
 
 // how close to the gate center you must be for it to count
-const GATE_RADIUS = TRACK_HALF_WIDTH * 2.0;
+const GATE_RADIUS = TRACK_HALF_WIDTH * 2.2;
 
 // HUD elements
 let hudLapEl, hudSpeedEl, hudCurLapEl, hudBestLapEl, hudRecordEl;
@@ -105,7 +111,7 @@ const p1 = trackPoints[1];          // Vector2
 const startDir2D   = p1.clone().sub(p0).normalize();
 // normal pointing across the track
 const startNorm2D  = new THREE.Vector2(-startDir2D.y, startDir2D.x);
-// ✅ Correct “forward” direction for laps = along the track from p0 → p1
+// Correct “forward” direction for laps = along the track from p0 → p1
 const START_FORWARD_DIR = new THREE.Vector3(
   startDir2D.x,
   0,
@@ -143,10 +149,10 @@ window.addEventListener("keydown", (e) => {
   // Start / restart with Q
   if (e.code === "KeyQ") {
     if (gameState === GAME_STATE.WAITING) {
-      startGame();
+      startCountdown();   
     } else if (gameState === GAME_STATE.CRASHED) {
       resetGame();
-      startGame();
+      startCountdown();
     }
   }
    // Restart after crash
@@ -670,6 +676,89 @@ function createStartGate() {
   scene.add(startGateMesh);
 }
 
+function startCountdown() {
+  gameState = GAME_STATE.COUNTDOWN;
+  timeScale = 1.0;
+
+  countdownStep = 0;
+  countdownTimer = 0;
+
+  // first value: "3"
+  makeCountdownSprite("3");
+
+  // hide the “Ready to Ride” overlay so only text shows
+  hideOverlay();
+}
+
+function makeCountdownSprite(text) {
+  // clean up old sprite
+  if (countdownSprite) {
+    scene.remove(countdownSprite);
+    if (countdownSprite.material.map) {
+      countdownSprite.material.map.dispose();
+    }
+    countdownSprite.material.dispose();
+    countdownSprite = null;
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = 1024;
+  canvas.height = 512;
+  const ctx = canvas.getContext("2d");
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // transparent bg
+  ctx.fillStyle = "rgba(0,0,0,0)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // high-tech gradient
+  const grad = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+  grad.addColorStop(0.0, "#00fff6");
+  grad.addColorStop(0.5, "#00d9ff");
+  grad.addColorStop(1.0, "#ff00ff");
+
+  ctx.font = 'bold 260px "Orbitron", system-ui, sans-serif';
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  ctx.shadowColor = "#00faff";
+  ctx.shadowBlur = 40;
+  ctx.fillStyle = grad;
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.encoding = THREE.sRGBEncoding;
+  texture.needsUpdate = true;
+
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+  });
+
+  countdownSprite = new THREE.Sprite(material);
+
+  // slightly bigger on "GO"
+  countdownSpriteBaseScale = (text === "GO") ? 60 : 45;
+  countdownSprite.scale.set(
+    countdownSpriteBaseScale,
+    countdownSpriteBaseScale * 0.5,
+    1
+  );
+
+  // position: floating in front of the wall, a bit above
+  const forwardOffset = START_FORWARD_DIR.clone().multiplyScalar(6); // move in front of gate
+  const pos = START_GATE_POS.clone().add(forwardOffset);
+  pos.y = 15; // height above ground
+  countdownSprite.position.copy(pos);
+
+  scene.add(countdownSprite);
+  countdownSpritePhase = 0;
+}
+
+
 function updateLaps() {
   if (!bike || !startGateMesh || gameState !== GAME_STATE.PLAYING) return;
 
@@ -835,6 +924,18 @@ function resetGame() {
    // 🔹 reset last bike position used for lap direction
   // lastBikePosForLap = null;
 
+  // 🔹 clear countdown visual + timers
+  if (countdownSprite) {
+    scene.remove(countdownSprite);
+    if (countdownSprite.material.map) {
+      countdownSprite.material.map.dispose();
+    }
+    countdownSprite.material.dispose();
+    countdownSprite = null;
+  }
+  countdownTimer = 0;
+  countdownStep = -1;
+
   if (trailMesh) {
     trailMesh.geometry.dispose();
     // recreate tiny starter tube
@@ -938,6 +1039,56 @@ function animate() {
       if (keys.right) turnAmount -= TURN_SPEED * gameDt;
     }
     bike.rotation.y += turnAmount;
+
+      // === COUNTDOWN STATE ===
+  if (gameState === GAME_STATE.COUNTDOWN) {
+    countdownTimer += rawDt;
+
+    const steps = ["3", "2", "1", "GO"];
+    const stepDuration = 0.85; // seconds for each value
+    const totalDuration = stepDuration * steps.length;
+
+    // which step should we be on?
+    const newStep = Math.min(
+      Math.floor(countdownTimer / stepDuration),
+      steps.length - 1
+    );
+
+    if (newStep !== countdownStep) {
+      countdownStep = newStep;
+      makeCountdownSprite(steps[countdownStep]);
+    }
+
+    // high-tech breathing + flicker animation
+    if (countdownSprite) {
+      countdownSpritePhase += rawDt * 5.0;
+      const pulse = 1.0 + 0.18 * Math.sin(countdownSpritePhase * 3.0);
+
+      countdownSprite.scale.set(
+        countdownSpriteBaseScale * pulse,
+        countdownSpriteBaseScale * 0.5 * pulse,
+        1
+      );
+
+      const mat = countdownSprite.material;
+      mat.opacity = 0.8 + 0.2 * Math.sin(countdownSpritePhase * 7.0);
+    }
+
+    // when countdown ends → start race
+    if (countdownTimer >= totalDuration) {
+      if (countdownSprite) {
+        scene.remove(countdownSprite);
+        if (countdownSprite.material.map) {
+          countdownSprite.material.map.dispose();
+        }
+        countdownSprite.material.dispose();
+        countdownSprite = null;
+      }
+
+      startGame();  // your existing function that sets PLAYING, starts lap timer
+    }
+  }
+
 
     // 2. Constant forward movement
     const forwardDir = new THREE.Vector3(0, 0, -1).applyQuaternion(bike.quaternion);
