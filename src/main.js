@@ -25,7 +25,7 @@ let keys = { left: false, right: false };
 let crashMessageEl = null;
 let crashTitleEl = null;
 let crashSubtitleEl = null;
-let forwardSpeed = 800;
+let forwardSpeed = 200;
 let lastGateSide = null;
 let countdownStep = -1;
 let countdownTimer = 0;
@@ -99,7 +99,7 @@ let lastLapCrossTime = 0;
 const LAP_COOLDOWN = 0.8; // seconds
 
 // how close to the gate center you must be for it to count
-const GATE_RADIUS = TRACK_HALF_WIDTH * 2.2;
+const GATE_RADIUS = 30;
 
 // HUD elements
 let hudLapEl, hudSpeedEl, hudCurLapEl, hudBestLapEl, hudRecordEl;
@@ -657,7 +657,7 @@ function createStartGate() {
 
   // ➜ move the gate some distance forward along the track direction
   const forward2D = startDir2D.clone().normalize();
-  const offsetDist = 20; // tweak if you want it further/closer
+  const offsetDist = 20; 
   START_GATE_POS.set(
     p0.x + forward2D.x * offsetDist,
     0,
@@ -714,16 +714,17 @@ function makeCountdownSprite(text) {
 
   // high-tech gradient
   const grad = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-  grad.addColorStop(0.0, "#00fff6");
-  grad.addColorStop(0.5, "#00d9ff");
-  grad.addColorStop(1.0, "#ff00ff");
+  grad.addColorStop(0.0, "#00f5ff");  // bright cyan
+  grad.addColorStop(0.35, "#00e5ffff"); // electric blue
+  grad.addColorStop(0.7, "#ec10aeff");  // neon magenta
+  grad.addColorStop(1.0, "#580dc2ff");  // deep purple
 
-  ctx.font = 'bold 260px "Orbitron", system-ui, sans-serif';
+  ctx.font = 'bold 320px "Orbitron", system-ui, sans-serif';
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
 
-  ctx.shadowColor = "#00faff";
-  ctx.shadowBlur = 40;
+  ctx.shadowColor = "#0c46c2ff"; // pink-ish glow
+  ctx.shadowBlur = 75;
   ctx.fillStyle = grad;
   ctx.fillText(text, canvas.width / 2, canvas.height / 2);
 
@@ -741,10 +742,10 @@ function makeCountdownSprite(text) {
   countdownSprite = new THREE.Sprite(material);
 
   // slightly bigger on "GO"
-  countdownSpriteBaseScale = (text === "GO") ? 60 : 45;
+  countdownSpriteBaseScale = (text === "GO") ? 100 : 80;
   countdownSprite.scale.set(
     countdownSpriteBaseScale,
-    countdownSpriteBaseScale * 0.5,
+    countdownSpriteBaseScale * 1.5,
     1
   );
 
@@ -1095,7 +1096,7 @@ function animate() {
     if (gameState === GAME_STATE.PLAYING) {
       bike.position.addScaledVector(forwardDir, forwardSpeed * gameDt);
       // Apply track-edge bounce after moving
-      applyTrackBounce();
+      // applyTrackBounce();
     }
 
     // 3. Hover effect
