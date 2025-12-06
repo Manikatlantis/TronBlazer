@@ -3,7 +3,6 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { metalness } from "three/tsl";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { tracks } from "./tracks.js";
 import './style.css'
@@ -25,7 +24,7 @@ let keys = { left: false, right: false };
 let crashMessageEl = null;
 let crashTitleEl = null;
 let crashSubtitleEl = null;
-let forwardSpeed = 200;
+let forwardSpeed = 900;
 let lastGateSide = null;
 let countdownStep = -1;
 let countdownTimer = 0;
@@ -76,10 +75,6 @@ for (let i = 0; i < trackPoints.length - 1; i++) {
 let gameState = GAME_STATE.WAITING;
 let timeScale = 1.0;
 
-// for camera shake
-let crashTime = 0;
-let shakeIntensity = 0.0;
-
 // trail collision data (segments)
 const trailSegments = []; // { start: Vector3, end: Vector3 }
 const TRAIL_RADIUS = 0.9; // match-ish your visible radius
@@ -97,9 +92,7 @@ let currentLapTime = 0;        // seconds
 let bestLapTime = null;        // null until first completed lap
 let lastLapCrossTime = 0;
 const LAP_COOLDOWN = 0.8; // seconds
-
-// how close to the gate center you must be for it to count
-const GATE_RADIUS = 30;
+const MIN_VALID_LAP_TIME = 10; // seconds – ignore anything faster than this
 
 // HUD elements
 let hudLapEl, hudSpeedEl, hudCurLapEl, hudBestLapEl, hudRecordEl;
@@ -109,8 +102,6 @@ const p1 = trackPoints[1];          // Vector2
 
 // direction along the track near spawn (XZ)
 const startDir2D   = p1.clone().sub(p0).normalize();
-// normal pointing across the track
-const startNorm2D  = new THREE.Vector2(-startDir2D.y, startDir2D.x);
 // Correct “forward” direction for laps = along the track from p0 → p1
 const START_FORWARD_DIR = new THREE.Vector3(
   startDir2D.x,
@@ -120,7 +111,31 @@ const START_FORWARD_DIR = new THREE.Vector3(
 
 // 3D versions
 let START_GATE_POS    = new THREE.Vector3(p0.x, 0, p0.y);
-const START_GATE_NORMAL = new THREE.Vector3(startNorm2D.x, 0, startNorm2D.y);
+
+// ===== LAP GATE (FROM MEASURED POINTS) =====
+// Given as X Z pairs in world space
+const GATE_POINTS = [
+  new THREE.Vector2(-36.8, 2452.3),
+  new THREE.Vector2(-36.7, 2460.3),
+  new THREE.Vector2(-36.7, 2470.3),
+  new THREE.Vector2(-36.6, 2478.2),
+  new THREE.Vector2(-36.5, 2488.6),
+  new THREE.Vector2(-36.5, 2499.5),
+  new THREE.Vector2(-36.4, 2510.7),
+  new THREE.Vector2(-36.3, 2522.4),
+  new THREE.Vector2(-36.2, 2534.1),
+  new THREE.Vector2(-36.1, 2545.7),
+  new THREE.Vector2(-36.1, 2556.2),
+];
+
+// Precomputed gate region + plane
+let gateMinX, gateMaxX, gateMinZ, gateMaxZ;
+let gatePlanePoint;   // a point on the gate plane
+let gatePlaneNormal;  // normal of the plane (which side we're on)
+
+// how much bigger than the raw points to treat as "in the gate zone"
+const GATE_X_MARGIN = 10;   // side-to-side tolerance
+const GATE_Z_MARGIN = 10;   // along-the-gate tolerance
 
 window.addEventListener("keydown", (e) => {
   if (e.code === "ArrowLeft" || e.code === "KeyA") keys.left = true;
@@ -169,6 +184,51 @@ window.addEventListener("keyup", (e) => {
 
 init();
 animate();
+
+function initGateFromPoints() {
+  gateMinX = Infinity;
+  gateMaxX = -Infinity;
+  gateMinZ = Infinity;
+  gateMaxZ = -Infinity;
+
+  for (const p of GATE_POINTS) {
+    gateMinX = Math.min(gateMinX, p.x);
+    gateMaxX = Math.max(gateMaxX, p.x);
+    gateMinZ = Math.min(gateMinZ, p.y);
+    gateMaxZ = Math.max(gateMaxZ, p.y);
+  }
+
+  // Center of the gate region
+  const cx = 0.5 * (gateMinX + gateMaxX);
+  const cz = 0.5 * (gateMinZ + gateMaxZ);
+  gatePlanePoint = new THREE.Vector3(cx, 0, cz);
+
+  // Direction of the measured line (from first point to last)
+  const first = GATE_POINTS[0];
+  const last  = GATE_POINTS[GATE_POINTS.length - 1];
+
+  const dir = new THREE.Vector3(
+    last.x - first.x,
+    0,
+    last.y - first.y    // NOTE: Vector2.y is our Z
+  ).normalize();
+
+  // A horizontal normal perpendicular to that line (in XZ plane)
+  // This defines our "gate plane"
+  gatePlaneNormal = new THREE.Vector3(
+    -dir.z,   // -dz
+    0,
+    dir.x    //  dx
+  ).normalize();
+
+  console.log("Gate region:",
+    "X:", gateMinX, gateMaxX,
+    "Z:", gateMinZ, gateMaxZ,
+    "planePoint:", gatePlanePoint,
+    "planeNormal:", gatePlaneNormal
+  );
+}
+
 
 function init() {
   const width = window.innerWidth;
@@ -232,7 +292,7 @@ function init() {
   hudRecordEl   = document.getElementById("hudRecord");
 
   showReadyToStartMessage();  // show "Press Q" on first load
-
+  initGateFromPoints();
   // World
   loadArena();
   loadBike();
@@ -539,11 +599,6 @@ function getTrailSamplePoint() {
     .applyQuaternion(bike.quaternion)
     .normalize();
 
-  // Local up (+Y) -> world (so lean doesn’t mess us up)
-  const up = new THREE.Vector3(0, 1, 0)
-    .applyQuaternion(bike.quaternion)
-    .normalize();
-
   const sample = bikePos.clone()
     .addScaledVector(forward, -2.5)   // behind the bike
 
@@ -758,28 +813,31 @@ function makeCountdownSprite(text) {
   scene.add(countdownSprite);
   countdownSpritePhase = 0;
 }
-
+function isNearGateRegion(bikePos) {
+  return (
+    bikePos.x >= gateMinX - GATE_X_MARGIN &&
+    bikePos.x <= gateMaxX + GATE_X_MARGIN &&
+    bikePos.z >= gateMinZ - GATE_Z_MARGIN &&
+    bikePos.z <= gateMaxZ + GATE_Z_MARGIN
+  );
+}
 
 function updateLaps() {
-  if (!bike || !startGateMesh || gameState !== GAME_STATE.PLAYING) return;
+  if (!bike || gameState !== GAME_STATE.PLAYING) return;
 
   const bikePos = new THREE.Vector3();
   bike.getWorldPosition(bikePos);
 
-  // Vector from gate center to bike
-  const rel = bikePos.clone().sub(START_GATE_POS);
-
-  // Distance in XZ from gate center
-  const distXZ = Math.hypot(rel.x, rel.z);
-  const insideRadius = distXZ <= GATE_RADIUS;
-
-  // Ignore everything far from the gate – we don't want random plane crossings
-  if (!insideRadius) {
+  // Only care if we're actually near the measured wall
+  if (!isNearGateRegion(bikePos)) {
     return;
   }
 
+  // Vector from gate center to bike
+  const rel = bikePos.clone().sub(gatePlanePoint);
+
   // Which side of the gate plane are we on? (<0 one side, >0 the other)
-  const dot = rel.dot(START_GATE_NORMAL);
+  const dot = rel.dot(gatePlaneNormal);
   const side = dot >= 0 ? 1 : -1;
 
   // First time near the gate → just record side
@@ -791,11 +849,11 @@ function updateLaps() {
   const now = clock.getElapsedTime();
 
   // We crossed the plane near the gate if the sign changed
-  const crossedPlaneNearGate =
+  const crossedPlane =
     side !== lastGateSide &&
     now - lastLapCrossTime > LAP_COOLDOWN;
 
-  if (crossedPlaneNearGate) {
+  if (crossedPlane) {
     // 🔹 Extra check: make sure we are going in the "forward" lap direction
     const bikeForward = new THREE.Vector3(0, 0, -1)
       .applyQuaternion(bike.quaternion)
@@ -815,26 +873,27 @@ function updateLaps() {
         const finishedLapTime = now - currentLapStartTime;
         currentLapTime = finishedLapTime;
 
-        if (bestLapTime === null || finishedLapTime < bestLapTime) {
-          bestLapTime = finishedLapTime;
-          showNewRecordFlash();
-        }
-      }
+        // Only treat it as a "real" lap if it's not insanely fast
+  if (
+    finishedLapTime >= MIN_VALID_LAP_TIME &&
+    (bestLapTime === null || finishedLapTime < bestLapTime)
+  ) {
+    bestLapTime = finishedLapTime;
+    showNewRecordFlash();
+  }
+}
+
       currentLapStartTime = now; // start timing next lap
     } else {
       // going backwards through the gate → ignore
-      // console.log("Crossed gate but facing backwards, no lap");
+      console.log("Crossed gate but facing backwards, no lap");
     }
   }
 
   // Update side only while near gate
   lastGateSide = side;
-  console.log("side:", side, "inside:", insideRadius, "laps:", lapCount);
 
 }
-
-
-
 
 function checkWallCollision() {
   const bikePos = new THREE.Vector3();
@@ -896,9 +955,6 @@ function handleCollisions() {
   if (checkTrailCollision() || checkWallCollision()) {
     // trigger crash
     gameState = GAME_STATE.CRASHED;
-    crashTime = clock.getElapsedTime();
-    timeScale = 0.2;         // slow motion
-    shakeIntensity = 0.8;    // how strong the shake is
     showCrashMessage();  
     console.log("CRASH!");
   }
@@ -921,9 +977,6 @@ function resetGame() {
   // reset current lap timing, keep bestLapTime as "record"
   currentLapStartTime = null;
   currentLapTime = 0;
-
-   // 🔹 reset last bike position used for lap direction
-  // lastBikePosForLap = null;
 
   // 🔹 clear countdown visual + timers
   if (countdownSprite) {
@@ -1096,7 +1149,7 @@ function animate() {
     if (gameState === GAME_STATE.PLAYING) {
       bike.position.addScaledVector(forwardDir, forwardSpeed * gameDt);
       // Apply track-edge bounce after moving
-      // applyTrackBounce();
+      applyTrackBounce();
     }
 
     // 3. Hover effect
