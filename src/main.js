@@ -963,7 +963,7 @@ function handleCollisions() {
 function resetGame() {
   gameState = GAME_STATE.WAITING;
   timeScale = 1.0;
-  shakeIntensity = 0.0;
+  // shakeIntensity = 0.0;
 
   DEBUG_FREE_CAMERA = false; // force back to game camera on reset
 
