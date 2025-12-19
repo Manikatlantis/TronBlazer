@@ -3,12 +3,13 @@
 Neon time trial racer in the style of the Tron lightcycle scenes, built with Three.js.
 Ride a lightcycle inside a sci fi arena, leave a glowing trail behind you, and race your own ghost to beat your best lap.
 
-I also cut a short intro video with the phonk track "Estou Livre" that I use when presenting the project.
+_I also cut a short intro video with the phonk track "Estou Livre" that I use when presenting the project._
 
 Repo
+```bash
 git clone https://github.com/Manikatlantis/TronBlazer.git
 cd TronBlazer
-
+```
 Features
 
 Neon lightcycle with hover and lean
