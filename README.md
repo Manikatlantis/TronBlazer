@@ -63,8 +63,8 @@ cd TronBlazer
 - ACES filmic tone mapping
 - sRGB output encoding
 
-Controls
-Key	Action
+## Controls
+### Key	Action
 A or ←	Turn left
 D or →	Turn right
 Q	Start countdown or restart after crash
@@ -172,91 +172,70 @@ Everything is wired up in **src/main.js** using ES modules.
 ## Bike movement and leaning
 ### Every frame:
 
-Forward direction is computed from the bike quaternion.
-
-When gameState is PLAYING, the bike moves by forwardDir * forwardSpeed * dt.
-
-A and D change bike.rotation.y for turning.
-
-Roll is applied on the Z axis based on input using MAX_LEAN and LEAN_SMOOTH.
-
-A small sine is added to bike.position.y for hovering.
+- Forward direction is computed from the bike quaternion.
+- When **gameState** is PLAYING, the bike moves by **forwardDir * forwardSpeed * dt**.
+- **A** and **D** change **bike.rotation.y** for turning.
+- Roll is applied on the Z axis based on input using **MAX_LEAN** and **LEAN_SMOOTH**.
+- A small sine is added to bike.position.y for hovering.
 
 Useful constants to tweak:
-
+```bash
 const forwardSpeed = 800;          // units per second
 const MAX_LEAN = 0.5;              // radians
 const LEAN_SMOOTH = 0.04;          // interpolation factor
 const TURN_SPEED = Math.PI * 0.5;  // radians per second
+```
 
-Start gate and lap timing
+## Start gate and lap timing
 
-GATE_POINTS is a set of measured world space points across the start line.
+- **GATE_POINTS** is a set of measured world space points across the start line.
+- From those, a bounding rectangle is built and stored as gateMinX, gateMaxX, **gateMinZ**, gateMaxZ.
+- A plane is defined using a center point (**gatePlanePoint**) and a normal (**gatePlaneNormal**).
 
-From those, a bounding rectangle is built and stored as gateMinX, gateMaxX, gateMinZ, gateMaxZ.
+### When the bike is near the gate:
 
-A plane is defined using a center point (gatePlanePoint) and a normal (gatePlaneNormal).
+- The sign of (bikePos - gatePlanePoint) dot gatePlaneNormal tells which side of the gate you are on.
+- If that sign flips between frames and the cooldown has passed, you crossed the gate.
+- The bike forward direction is dotted with START_FORWARD_DIR to check if you are going the proper way.
 
-When the bike is near the gate:
+### Lap timing:
 
-The sign of (bikePos - gatePlanePoint) dot gatePlaneNormal tells which side of the gate you are on.
+- On a valid crossing, the current lap time is finished and compared with **bestLapTime**.
+- Laps shorter than **MIN_VALID_LAP_TIME** are ignored.
+- If it is a new record, HUD flashes "New Record" and ghost data is updated.
+- Lap count increments and a new lap timer starts.
 
-If that sign flips between frames and the cooldown has passed, you crossed the gate.
+## Ghost lap and ghost trail
 
-The bike forward direction is dotted with START_FORWARD_DIR to check if you are going the proper way.
+### While you are playing a lap:
 
-Lap timing:
+- currentLapFrames collects snapshots of:
+- `t` (time since lap start)
+- `pos` (world position)
+- `rotY` (rotation around Y)
+- Sampling happens every `GHOST_SAMPLE_INTERVAL` seconds.
 
-On a valid crossing, the current lap time is finished and compared with bestLapTime.
+### When a lap becomes the new best:
 
-Laps shorter than MIN_VALID_LAP_TIME are ignored.
+- `bestLapGhostFrames` is set to a deep copy of those frames.
+- `ghostActive` becomes true.
+- `ghostBike` is a clone of the main bike with a transparent neon material.
 
-If it is a new record, HUD flashes "New Record" and ghost data is updated.
+### During future laps:
 
-Lap count increments and a new lap timer starts.
+- Current lap time gives `ghostT`.
+- The code finds the two frames that bracket this time and interpolates position and rotation. 
+- The ghost bike replays along your best path.
 
-Ghost lap and ghost trail
+### Ghost trail:
 
-While you are playing a lap:
+- Once `bestLapGhostFrames` is ready, their positions are fed into a `CatmullRomCurve3`.
+- A `TubeGeometry` is created on that curve.
+- A clone of the player trail shader is used, with ghost colors and slightly different opacity.
+- The trail is scaled to match the player trail style.
 
-currentLapFrames collects snapshots of:
-
-t (time since lap start)
-
-pos (world position)
-
-rotY (rotation around Y)
-
-Sampling happens every GHOST_SAMPLE_INTERVAL seconds.
-
-When a lap becomes the new best:
-
-bestLapGhostFrames is set to a deep copy of those frames.
-
-ghostActive becomes true.
-
-ghostBike is a clone of the main bike with a transparent neon material.
-
-During future laps:
-
-Current lap time gives ghostT.
-
-The code finds the two frames that bracket this time and interpolates position and rotation.
-
-The ghost bike replays along your best path.
-
-Ghost trail:
-
-Once bestLapGhostFrames is ready, their positions are fed into a CatmullRomCurve3.
-
-A TubeGeometry is created on that curve.
-
-A clone of the player trail shader is used, with ghost colors and slightly different opacity.
-
-The trail is scaled to match the player trail style.
-
-Ghost colors are set at the top:
-
+### Ghost colors are set at the top:
+``` bash
 const GHOST_THEMES = {
   cyan:   { body: 0x00ffff, edge: 0x00ffff },
   magenta:{ body: 0xff00ff, edge: 0xff66ff },
@@ -267,79 +246,61 @@ const GHOST_THEMES = {
 };
 
 const ACTIVE_GHOST_THEME = GHOST_THEMES.lime;
+```
 
+Switch `ACTIVE_GHOST_THEME` to try different looks.
 
-Switch ACTIVE_GHOST_THEME to try different looks.
+## Player trail shader
 
-Player trail shader
+- The player trail is a `ShaderMaterial` with:
+- Vertex shader that passes uv, world position and normal. 
+- Fragment shader that:
+- Computes a Fresnel term so edges glow more when viewed at a grazing angle. 
+- Warps the V coordinate over time with sines so the trail looks like moving energy.
+- Builds band masks so the center is softer and edges are hot. 
+- Fades color and alpha with uFadePower based on age along the trail.
+- Adds extra brightness near the "head" of the trail close to the bike.
 
-The player trail is a ShaderMaterial with:
-
-Vertex shader that passes uv, world position and normal.
-
-Fragment shader that:
-
-Computes a Fresnel term so edges glow more when viewed at a grazing angle.
-
-Warps the V coordinate over time with sines so the trail looks like moving energy.
-
-Builds band masks so the center is softer and edges are hot.
-
-Fades color and alpha with uFadePower based on age along the trail.
-
-Adds extra brightness near the "head" of the trail close to the bike.
-
-Uniforms:
-
+### Uniforms:
+``` bash
 uniform float uTime;
 uniform vec3  uColorCore;
 uniform vec3  uColorEdge;
 uniform float uOpacity;
 uniform float uFadePower;
+```
 
+You can tune these in `createTrail()` if you want different colors or a longer or shorter tail.
 
-You can tune these in createTrail() if you want different colors or a longer or shorter tail.
+## Cameras
 
-Cameras
+### Chase mode
 
-Chase mode
+- Camera offset is defined in bike local space.
+- It is transformed into world space and lerped toward each frame.
+- Camera looks at a point slightly in front of the bike.
 
-Camera offset is defined in bike local space.
+### Cinematic mode
 
-It is transformed into world space and lerped toward each frame.
+- Uses `cinematicTime` to slowly rotate the camera around the front side of the bike.
+- Radius, height and FOV change over time for a soft "dolly and crane" feel.
+- Camera still looks slightly ahead of the bike so framing stays interesting.
 
-Camera looks at a point slightly in front of the bike.
+`C` toggles a free debug camera that still uses OrbitControls around the bike.
 
-Cinematic mode
-
-Uses cinematicTime to slowly rotate the camera around the front side of the bike.
-
-Radius, height and FOV change over time for a soft "dolly and crane" feel.
-
-Camera still looks slightly ahead of the bike so framing stays interesting.
-
-C toggles a free debug camera that still uses OrbitControls around the bike.
-
-Customization
+## Customization
 
 Some easy knobs to play with:
 
-forwardSpeed for overall pace
+- `forwardSpeed` for overall pace
+- `MAX_LEAN`, `TURN_SPEED` for handling
+- `TRACK_HALF_WIDTH` in `tracks.js` to change lane width
+- `ARENA_HALF_SIZE_X` and `ARENA_HALF_SIZE_Z` scaling in `loadArena()`
+- Trail colors and fade behavior through `uColorCore`, `uColorEdge`, `uOpacity`, `uFadePower`
+- Camera ofsets and FOV ranges
 
-MAX_LEAN, TURN_SPEED for handling
+## Known limitations
 
-TRACK_HALF_WIDTH in tracks.js to change lane width
-
-ARENA_HALF_SIZE_X and ARENA_HALF_SIZE_Z scaling in loadArena()
-
-Trail colors and fade behavior through uColorCore, uColorEdge, uOpacity, uFadePower
-
-Camera offsets and FOV ranges
-
-Known limitations
-
-No in game menu yet, everything is controlled from the keyboard.
-
-Only one arena and one track are wired up right now.
-
-Track data lives in code, there is no track editor or selection screen.
+- No in game menu yet, everything is controlled from the keyboard.
+- Only one arena and one track are wired up right now.
+- Track data lives in code, there is no track editor or selection screen.
