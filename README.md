@@ -16,72 +16,52 @@ cd TronBlazer
 - Constant forward speed with smooth turning
 - Bike leans into corners for a more arcade feel
 
+## Tron style trail
 
-Glowing Tron style trail
+- Custom GLSL shader with flowing energy effect
+- Trail fades out based on age
+- Colliding with your own trail counts as a crash
 
-Custom GLSL shader with flowing "energy" effect
+## Sci fi arena
 
-Trail fades out smoothly based on age
+- GLTF arena model loaded with GLTFLoader
+- Arena bounds computed from the model so the bike cannot escape
+- Rim lights at corners to give a clean silhouette
 
-Colliding with your own trail counts as a crash
+## Lap system
 
-Sci fi arena
+- Invisible start gate built from measured track points
+- Crossing the gate in the correct direction increments the lap
+- Lap timer and best lap tracking
+- Laps shorter than a minimum time are ignored so tiny loops do not count
 
-Imported GLTF arena model
+## Ghost replay
 
-Arena bounds computed from the model
+- While you race, position and rotation are sampled every few frames
+- A best lap ghost is saved when you set a new record
+- Ghost bike replays your best path on future laps
+- Separate neon ghost trail shows the full line of the record lap
+- Ghost colors can be changed with a small theme map
 
-Rim lights at the corners to give a clean silhouette
+## Cameras
 
-Lap system
+- Chase camera - classic behind and above view
+- Cinematic camera - orbits the bike on the front side with slow radius, height and FOV changes
 
-Invisible start gate built from measured track points
+## HUD and UI
 
-Crossing the gate in the correct direction increments the lap
+- Lap count
+- Speed display
+- Current lap time
+- Best lap time
+- "New Record" flash when you beat your best time
+- Overlay messages for ready, countdown and crash states
 
-Lap timer and best lap tracking
+## Post processing
 
-Laps shorter than a minimum time are ignored so tiny loops do not count
-
-Ghost replay
-
-While you race, your position and rotation are sampled every few frames
-
-A "best lap" ghost is saved when you set a new record
-
-Ghost bike replays your best path on future laps
-
-Separate neon ghost trail shows the full line of the record lap
-
-Ghost colors are configurable through a small theme map
-
-Two camera modes
-
-Chase camera sits behind and above the bike
-
-Cinematic camera orbits the bike on the front side with slow radius, height and FOV changes
-
-HUD and UI
-
-Lap count
-
-Speed display
-
-Current lap time
-
-Best lap time
-
-"New Record" flash when you beat your best time
-
-Overlay messages for ready, countdown and crash states
-
-Post processing
-
-UnrealBloomPass for neon glow
-
-ACES filmic tone mapping
-
-sRGB output encoding
+- UnrealBloomPass for neon glow
+- ACES filmic tone mapping
+- sRGB output encoding
 
 Controls
 Key	Action
