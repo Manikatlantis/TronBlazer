@@ -96,19 +96,16 @@ Modern browser with WebGL support
 Install dependencies:
 ```bash
 git clone https://github.com/Manikatlantis/TronBlazer.git
-cd TronBlazer 1
+cd TronBlazer
+cd src
 ```
 ```bash
 npm install
-# or
-yarn
 ```
 
 ## Start the dev server:
 ```bash
 npm run dev
-# or
-yarn dev
 ```
 
 Open the local URL that the dev server prints (usually something like http://localhost:5173).
@@ -140,52 +137,40 @@ Rough layout of the repo:
     └── ...
 ```
 
-The code currently expects the models at:
+### The code currently expects the models at:
 
-loader.load("/models/lightcycle.glb", ...)
-loader.load("/models/arena2/scene.gltf", ...)
+_loader.load("/models/lightcycle.glb", ...)
+loader.load("/models/arena2/scene.gltf", ...)_
 
 
 If you move the models or rename folders, update those paths in loadBike() and loadArena().
 
-How it works
-Core stack
+## How it works
+### Core stack
 
-three for rendering
+**three** for rendering
+**GLTFLoader** for loading the bike and arena
+**EffectComposer**, **RenderPass**, **UnrealBloomPass** for bloom and post processing
+**OrbitControls** for the debug camera
+Everything is wired up in **src/main.js** using ES modules.
 
-GLTFLoader for loading the bike and arena
+## Track and arena
 
-EffectComposer, RenderPass, UnrealBloomPass for bloom and post processing
+- Track centerline is defined in **tracks.js** as an array of **[x, z]** points.
+- These are turned into **Vector2** objects and cached in **trackPoints**.
+- From those, **trackSegments2D** are precomputed so the game can:
+- Keep the bike inside a half width
+- Push the bike back in with a "bounce" effect when it goes too far out
 
-OrbitControls for the debug camera
+## Arena:
 
-Everything is wired up in src/main.js using ES modules.
+- The GLTF arena is loaded and scaled so the floor is around **y = 0**.
+- A **Box3** around the arena gives the world size in XZ.
+- Those sizes are used as **ARENA_HALF_SIZE_X** and **ARENA_HALF_SIZE_Z**.
+- A simple wall collision chek prevents the bike from leaving the arena.
 
-Track and arena
-
-Track centerline is defined in tracks.js as an array of [x, z] points.
-
-These are turned into Vector2 objects and cached in trackPoints.
-
-From those, trackSegments2D are precomputed so the game can:
-
-Keep the bike inside a half width
-
-Push the bike back in with a "bounce" effect when it goes too far out
-
-Arena:
-
-The GLTF arena is loaded and scaled so the floor is around y = 0.
-
-A Box3 around the arena gives the world size in XZ.
-
-Those sizes are used as ARENA_HALF_SIZE_X and ARENA_HALF_SIZE_Z.
-
-A simple wall collision check prevents the bike from leaving the arena.
-
-Bike movement and leaning
-
-Every frame:
+## Bike movement and leaning
+### Every frame:
 
 Forward direction is computed from the bike quaternion.
 
