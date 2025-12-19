@@ -24,7 +24,7 @@ let keys = { left: false, right: false };
 let crashMessageEl = null;
 let crashTitleEl = null;
 let crashSubtitleEl = null;
-let forwardSpeed = 600;
+let forwardSpeed = 800;
 let lastGateSide = null;
 let countdownStep = -1;
 let countdownTimer = 0;
@@ -106,6 +106,8 @@ let ghostBike = null;
 let ghostActive = false;
 const GHOST_SAMPLE_INTERVAL = 0.05; // seconds between recorded frames
 let lastGhostSampleTime = 0;
+let ghostTrailMesh = null;
+let ghostTrailMaterial = null;
 
 // direction along the track near spawn (XZ)
 const startDir2D   = p1.clone().sub(p0).normalize();
@@ -133,6 +135,28 @@ const GATE_POINTS = [
   new THREE.Vector2(-36.1, 2545.7),
   new THREE.Vector2(-36.1, 2556.2),
 ];
+
+// === GHOST COLOR THEMES ===
+const GHOST_THEMES = {
+  cyan: {
+    body: 0x00ffff,
+    edge: 0x00ffff,
+  },
+  magenta: {
+    body: 0xff00ff,
+    edge: 0xff66ff,
+  },
+  lime: {
+    body: 0xa6ff00,
+    edge: 0xe1ff66,
+  },
+  orange: {
+    body: 0xff6b00,
+    edge: 0xffb066,
+  },
+};
+
+const ACTIVE_GHOST_THEME = GHOST_THEMES.magenta; // <— change this to try others
 
 // Precomputed gate region + plane
 let gateMinX, gateMaxX, gateMinZ, gateMaxZ;
@@ -358,11 +382,11 @@ function loadBike() {
           child.castShadow = false;
           child.receiveShadow = false;
           child.material = new THREE.MeshStandardMaterial({
-            color: 0x00ffff,         // cyan
-            emissive: 0x0055ff,
-            emissiveIntensity: 1.5,
+            color: ACTIVE_GHOST_THEME.body,
+            emissive: ACTIVE_GHOST_THEME.body,
+            emissiveIntensity: 1.6,
             transparent: true,
-            opacity: 0.25,
+            opacity: 0.38,
             depthWrite: false,
             blending: THREE.AdditiveBlending,
           });
@@ -848,7 +872,6 @@ function isNearGateRegion(bikePos) {
     bikePos.z <= gateMaxZ + GATE_Z_MARGIN
   );
 }
-
 function updateLaps() {
   if (!bike || gameState !== GAME_STATE.PLAYING) return;
 
@@ -881,7 +904,7 @@ function updateLaps() {
     now - lastLapCrossTime > LAP_COOLDOWN;
 
   if (crossedPlane) {
-    // 🔹 Extra check: make sure we are going in the "forward" lap direction
+    //  Extra check: make sure we are going in the "forward" lap direction
     const bikeForward = new THREE.Vector3(0, 0, -1)
       .applyQuaternion(bike.quaternion)
       .setY(0)
@@ -897,33 +920,74 @@ function updateLaps() {
       flashStartGate();
 
       if (currentLapStartTime !== null) {
-  const finishedLapTime = now - currentLapStartTime;
-  currentLapTime = finishedLapTime;
+        const finishedLapTime = now - currentLapStartTime;
+        currentLapTime = finishedLapTime;
 
-  if (finishedLapTime >= MIN_VALID_LAP_TIME) {
-    // New record?
-    if (bestLapTime === null || finishedLapTime < bestLapTime) {
-      bestLapTime = finishedLapTime;
-      showNewRecordFlash();
+        // === NEW BEST LAP? ===
+        if (
+          finishedLapTime >= MIN_VALID_LAP_TIME &&
+          (bestLapTime === null || finishedLapTime < bestLapTime)
+        ) {
+          bestLapTime = finishedLapTime;
+          showNewRecordFlash();
 
-      // 🔹 Save ghost path for this best lap
-      bestLapGhostFrames = currentLapFrames.map(f => ({
-        t: f.t,
-        pos: f.pos.clone(),
-        rotY: f.rotY,
-      }));
-      ghostActive = bestLapGhostFrames.length > 1;
-      if (ghostBike && ghostActive) ghostBike.visible = true;
-    }
-  }
-}
+          // Save ghost frames for this best lap
+          bestLapGhostFrames = currentLapFrames.map((f) => ({
+            t: f.t,
+            pos: f.pos.clone(),
+            rotY: f.rotY,
+          }));
+          ghostActive = bestLapGhostFrames.length > 1;
+          console.log("Saved ghost frames:", bestLapGhostFrames.length);
 
-// start recording the next lap
-currentLapStartTime = now;
-currentLapFrames = [];
-lastGhostSampleTime = 0;
+          if (ghostBike && ghostActive) ghostBike.visible = true;
 
-      currentLapStartTime = now; // start timing next lap
+          // ==== BUILD / UPDATE GHOST TRAIL ====
+          if (ghostTrailMesh) {
+            ghostTrailMesh.geometry.dispose();
+            scene.remove(ghostTrailMesh);
+            ghostTrailMesh = null;
+          }
+
+          if (bestLapGhostFrames.length > 1) {
+            const points = bestLapGhostFrames.map((f) => f.pos.clone());
+            const curve = new THREE.CatmullRomCurve3(points);
+            const tubularSegments = Math.max(2, points.length * 3);
+            const radius = 0.5;
+            const radialSegments = 16;
+
+            if (!ghostTrailMaterial) {
+              ghostTrailMaterial = trailMaterial.clone();
+              ghostTrailMaterial.uniforms =
+                THREE.UniformsUtils.clone(trailMaterial.uniforms);
+              ghostTrailMaterial.uniforms.uColorCore.value =
+                new THREE.Color(ACTIVE_GHOST_THEME.body);
+              ghostTrailMaterial.uniforms.uColorEdge.value =
+                new THREE.Color(ACTIVE_GHOST_THEME.edge);
+              ghostTrailMaterial.uniforms.uOpacity.value = 0.4;
+            }
+
+            const geo = new THREE.TubeGeometry(
+              curve,
+              tubularSegments,
+              radius,
+              radialSegments,
+              false
+            );
+            ghostTrailMesh = new THREE.Mesh(geo, ghostTrailMaterial);
+            ghostTrailMesh.scale.set(1.0, 1.8, 1.0);
+            scene.add(ghostTrailMesh);
+
+            console.log("Ghost trail mesh created");
+          }
+          // ================================
+        }
+      }
+
+      // 🔁 Start recording the NEXT lap
+      currentLapStartTime = now;
+      currentLapFrames = [];
+      lastGhostSampleTime = 0;
     } else {
       // going backwards through the gate → ignore
       console.log("Crossed gate but facing backwards, no lap");
@@ -932,7 +996,6 @@ lastGhostSampleTime = 0;
 
   // Update side only while near gate
   lastGateSide = side;
-
 }
 
 function checkWallCollision() {
@@ -1019,7 +1082,14 @@ function resetGame() {
   if (ghostBike) {
     ghostBike.visible = false;
   }
+ if (ghostTrailMesh) {
+    ghostTrailMesh.geometry.dispose();
+    scene.remove(ghostTrailMesh);
+    ghostTrailMesh = null;
+  }
+  ghostTrailMaterial = ghostTrailMaterial; // keep material to reuse colors
   lastGhostSampleTime = 0;
+
 
 
   // reset current lap timing, keep bestLapTime as "record"
@@ -1132,6 +1202,14 @@ function animate() {
   if (trailMaterial && trailMaterial.uniforms && trailMaterial.uniforms.uTime) {
     trailMaterial.uniforms.uTime.value = t;
   }
+  if (
+  ghostTrailMaterial &&
+  ghostTrailMaterial.uniforms &&
+  ghostTrailMaterial.uniforms.uTime
+) {
+  ghostTrailMaterial.uniforms.uTime.value = t;
+}
+
 
   if (bikeReady && bike) {
     // 1. Turn left/right only while playing
