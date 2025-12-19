@@ -10,15 +10,12 @@ Repo
 git clone https://github.com/Manikatlantis/TronBlazer.git
 cd TronBlazer
 ```
-Features
+## Core gameplay
 
-Neon lightcycle with hover and lean
+- Neon lightcycle with hover and lean
+- Constant forward speed with smooth turning
+- Bike leans into corners for a more arcade feel
 
-Constant forward speed
-
-Subtle hover animation
-
-Bike leans into turns
 
 Glowing Tron style trail
 
