@@ -43,7 +43,7 @@ cd TronBlazer
 - Separate neon ghost trail shows the full line of the record lap
 - Ghost colors can be changed with a small theme map
 
-## Cameras
+## Cameras (toggled by 'v')
 
 - Chase camera - classic behind and above view
 - Cinematic camera - orbits the bike on the front side with slow radius, height and FOV changes
