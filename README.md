@@ -73,7 +73,7 @@ C	Toggle free OrbitControls debug camera
 V	Toggle Chase vs Cinematic camera mode
 P	Log bike position to the console (debug)
 
-Game states:
+## Game states:
 
 Ready: bike at spawn, overlay shows "Press Q to start"
 
@@ -83,7 +83,7 @@ Playing: bike moves, laps and trails are active
 
 Crashed: overlay tells you to press R or Q
 
-Requirements
+## Requirements
 
 Node.js 18 or newer
 
@@ -91,37 +91,38 @@ npm or yarn
 
 Modern browser with WebGL support
 
-Getting started
+## Getting started
 
 Install dependencies:
-
+```bash
 git clone https://github.com/Manikatlantis/TronBlazer.git
-cd TronBlazer
-
+cd TronBlazer 1
+```
+```bash
 npm install
 # or
 yarn
+```
 
-
-Start the dev server:
-
+## Start the dev server:
+```bash
 npm run dev
 # or
 yarn dev
-
+```
 
 Open the local URL that the dev server prints (usually something like http://localhost:5173).
 You should see the arena and the bike. Press Q to start the countdown and ride.
 
-Build for production:
-
+## Build for production:
+```bash
 npm run build
 npm run preview
-
-Project structure
+```
+## Project structure
 
 Rough layout of the repo:
-
+```bash
 .
 ├── index.html
 ├── package.json
@@ -137,7 +138,7 @@ Rough layout of the repo:
     ├── tracks.js
     ├── style.css
     └── ...
-
+```
 
 The code currently expects the models at:
 
