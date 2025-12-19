@@ -9,7 +9,7 @@ import './style.css'
 
 // SPAWN POINT
 const SPAWN_POS = new THREE.Vector3(0, 0.9, 2500);
-const SPAWN_ROT_Y = Math.PI * 0.5;   // face inward, for example
+const SPAWN_ROT_Y = Math.PI * 0.5;   
 
 const MAX_LEAN = 0.5;      // radians (~30°)
 const LEAN_SMOOTH = 0.04;  // 0–1, higher = snappier
@@ -24,7 +24,7 @@ let keys = { left: false, right: false };
 let crashMessageEl = null;
 let crashTitleEl = null;
 let crashSubtitleEl = null;
-let forwardSpeed = 900;
+let forwardSpeed = 600;
 let lastGateSide = null;
 let countdownStep = -1;
 let countdownTimer = 0;
@@ -83,7 +83,6 @@ const TRAIL_RADIUS = 0.9; // match-ish your visible radius
 let ARENA_HALF_SIZE_X = 80;
 let ARENA_HALF_SIZE_Z = 80;
 
-// ===== START/FINISH GATE CONFIG =====
 let startGateMesh;
 let lapCount = 0;
 
@@ -100,9 +99,17 @@ let hudLapEl, hudSpeedEl, hudCurLapEl, hudBestLapEl, hudRecordEl;
 const p0 = trackPoints[0];          // Vector2
 const p1 = trackPoints[1];          // Vector2
 
+// GHOST BIKE
+let bestLapGhostFrames = []; // [{ t, pos: THREE.Vector3, rotY: number }]
+let currentLapFrames    = [];
+let ghostBike = null;
+let ghostActive = false;
+const GHOST_SAMPLE_INTERVAL = 0.05; // seconds between recorded frames
+let lastGhostSampleTime = 0;
+
 // direction along the track near spawn (XZ)
 const startDir2D   = p1.clone().sub(p0).normalize();
-// Correct “forward” direction for laps = along the track from p0 → p1
+// Correct forward direction for laps = along the track from p0 → p1
 const START_FORWARD_DIR = new THREE.Vector3(
   startDir2D.x,
   0,
@@ -112,7 +119,6 @@ const START_FORWARD_DIR = new THREE.Vector3(
 // 3D versions
 let START_GATE_POS    = new THREE.Vector3(p0.x, 0, p0.y);
 
-// ===== LAP GATE (FROM MEASURED POINTS) =====
 // Given as X Z pairs in world space
 const GATE_POINTS = [
   new THREE.Vector2(-36.8, 2452.3),
@@ -344,6 +350,27 @@ function loadBike() {
       bike.position.copy(SPAWN_POS);
       bike.rotation.set(0, SPAWN_ROT_Y, 0);
       scene.add(bike);
+      
+            // --- GHOST BIKE SETUP ---
+      ghostBike = bike.clone(true);
+      ghostBike.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = false;
+          child.receiveShadow = false;
+          child.material = new THREE.MeshStandardMaterial({
+            color: 0x00ffff,         // cyan
+            emissive: 0x0055ff,
+            emissiveIntensity: 1.5,
+            transparent: true,
+            opacity: 0.25,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          });
+        }
+      });
+      ghostBike.visible = false;
+      scene.add(ghostBike);
+      // -------------------------
 
       bikeReady = true;
       createTrail();
@@ -870,18 +897,31 @@ function updateLaps() {
       flashStartGate();
 
       if (currentLapStartTime !== null) {
-        const finishedLapTime = now - currentLapStartTime;
-        currentLapTime = finishedLapTime;
+  const finishedLapTime = now - currentLapStartTime;
+  currentLapTime = finishedLapTime;
 
-        // Only treat it as a "real" lap if it's not insanely fast
-  if (
-    finishedLapTime >= MIN_VALID_LAP_TIME &&
-    (bestLapTime === null || finishedLapTime < bestLapTime)
-  ) {
-    bestLapTime = finishedLapTime;
-    showNewRecordFlash();
+  if (finishedLapTime >= MIN_VALID_LAP_TIME) {
+    // New record?
+    if (bestLapTime === null || finishedLapTime < bestLapTime) {
+      bestLapTime = finishedLapTime;
+      showNewRecordFlash();
+
+      // 🔹 Save ghost path for this best lap
+      bestLapGhostFrames = currentLapFrames.map(f => ({
+        t: f.t,
+        pos: f.pos.clone(),
+        rotY: f.rotY,
+      }));
+      ghostActive = bestLapGhostFrames.length > 1;
+      if (ghostBike && ghostActive) ghostBike.visible = true;
+    }
   }
 }
+
+// start recording the next lap
+currentLapStartTime = now;
+currentLapFrames = [];
+lastGhostSampleTime = 0;
 
       currentLapStartTime = now; // start timing next lap
     } else {
@@ -973,12 +1013,20 @@ function resetGame() {
   lapCount = 0;
   lastLapCrossTime = 0;
   lastGateSide = null;
+  bestLapGhostFrames = [];
+  currentLapFrames = [];
+  ghostActive = false;
+  if (ghostBike) {
+    ghostBike.visible = false;
+  }
+  lastGhostSampleTime = 0;
+
 
   // reset current lap timing, keep bestLapTime as "record"
   currentLapStartTime = null;
   currentLapTime = 0;
 
-  // 🔹 clear countdown visual + timers
+  // clear countdown visual + timers
   if (countdownSprite) {
     scene.remove(countdownSprite);
     if (countdownSprite.material.map) {
@@ -1142,7 +1190,18 @@ function animate() {
       startGame();  // your existing function that sets PLAYING, starts lap timer
     }
   }
-
+  // Record ghost frames during a lap
+    if (gameState === GAME_STATE.PLAYING && currentLapStartTime !== null) {
+      const lapT = clock.getElapsedTime() - currentLapStartTime;
+      if (lapT - lastGhostSampleTime >= GHOST_SAMPLE_INTERVAL) {
+        currentLapFrames.push({
+          t: lapT,
+          pos: bike.position.clone(),
+          rotY: bike.rotation.y,
+        });
+        lastGhostSampleTime = lapT;
+      }
+    }
 
     // 2. Constant forward movement
     const forwardDir = new THREE.Vector3(0, 0, -1).applyQuaternion(bike.quaternion);
@@ -1173,6 +1232,44 @@ function animate() {
       updateTrail();
       updateLaps();
       handleCollisions();
+    }
+    
+        // --- GHOST PLAYBACK ---
+    if (
+      ghostActive &&
+      ghostBike &&
+      bestLapGhostFrames.length > 1 &&
+      gameState === GAME_STATE.PLAYING &&
+      currentLapStartTime !== null
+    ) {
+      const ghostT = clock.getElapsedTime() - currentLapStartTime;
+      const lastFrame = bestLapGhostFrames[bestLapGhostFrames.length - 1];
+
+      if (ghostT > lastFrame.t) {
+        // finished ghost lap – hide until next lap
+        ghostBike.visible = false;
+      } else {
+        ghostBike.visible = true;
+
+        // find segment [i, i+1] that spans ghostT
+        let i = 0;
+        while (
+          i < bestLapGhostFrames.length - 2 &&
+          bestLapGhostFrames[i + 1].t < ghostT
+        ) {
+          i++;
+        }
+
+        const f0 = bestLapGhostFrames[i];
+        const f1 = bestLapGhostFrames[i + 1];
+        const span = Math.max(f1.t - f0.t, 0.0001);
+        const alpha = (ghostT - f0.t) / span;
+
+        ghostBike.position.copy(f0.pos).lerp(f1.pos, alpha);
+        ghostBike.rotation.y = THREE.MathUtils.lerp(f0.rotY, f1.rotY, alpha);
+      }
+    } else if (ghostBike && !ghostActive) {
+      ghostBike.visible = false;
     }
 
     // 6. Camera
