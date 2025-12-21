@@ -327,7 +327,7 @@ function loadBike() {
   const loader = new GLTFLoader();
 
   loader.load(
-    "/models/lightcycle.glb",
+    "./public/models/lightcycle.glb",
     // "/models/attack_helicopter_concept.glb",
     (gltf) => {
       bike = gltf.scene;
@@ -407,7 +407,7 @@ function loadArena() {
   const loader = new GLTFLoader();
 
   loader.load(
-    "/models/arena2/scene.gltf",   // adjust if your folder/file name differs
+    "./public/models/arena2/scene.gltf",   // adjust if your folder/file name differs
     (gltf) => {
       arena = gltf.scene;
 
