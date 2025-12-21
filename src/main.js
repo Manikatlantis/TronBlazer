@@ -1,4 +1,3 @@
-// import './style.css'
 // import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js";
 import * as THREE from "three";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
@@ -7,7 +6,6 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { tracks } from "./tracks.js";
-// import "./style.css";
 
 // SPAWN POINT
 const SPAWN_POS = new THREE.Vector3(0, 0.9, 2500);
