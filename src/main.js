@@ -7,7 +7,7 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { tracks } from "./tracks.js";
-import "./style.css";
+// import "./style.css";
 
 // SPAWN POINT
 const SPAWN_POS = new THREE.Vector3(0, 0.9, 2500);
