@@ -192,7 +192,24 @@ button:focus-visible {
   display: flex;
   justify-content: space-between;
   gap: 10px;
+  align-items: center;
   margin-bottom: 4px;
+}
+
+.hud-bar {
+  width: 140px;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.18);
+  overflow: hidden;
+}
+
+.hud-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: rgba(0, 255, 255, 0.85);
+  box-shadow: 0 0 10px rgba(0,255,255,0.55);
 }
 
 .hud-label {
@@ -218,4 +235,22 @@ button:focus-visible {
 
 #hudRecord.visible {
   opacity: 1;
+}
+
+#nitroBar {
+  width: 140px;
+  height: 10px;
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255,255,255,0.06);
+  margin: 0 8px;
+}
+
+#nitroFill {
+  height: 100%;
+  width: 100%;
+  background: rgba(0, 245, 255, 0.9);
+  box-shadow: 0 0 10px rgba(0,245,255,0.6);
+  transform-origin: left center;
 }

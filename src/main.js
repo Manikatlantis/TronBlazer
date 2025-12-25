@@ -20,7 +20,7 @@ let bike;
 let bikeReady = false;
 let controls;
 let DEBUG_FREE_CAMERA = false; // to toggle for debugging
-let keys = { left: false, right: false };
+let keys = { left: false, right: false, nitro: false};
 let crashMessageEl = null;
 let crashTitleEl = null;
 let crashSubtitleEl = null;
@@ -31,6 +31,32 @@ let countdownTimer = 0;
 let countdownSprite = null;
 let countdownSpritePhase = 0;
 let countdownSpriteBaseScale = 45;
+let speedNow = 0;
+
+// NITRO
+let nitro = 0;                 // current amount
+const NITRO_MAX = 100;
+const NITRO_DRAIN_PER_SEC = 30;  // drains while holding shift
+const NITRO_SPEED_BONUS = 300;   // added to forwardSpeed while nitro active
+
+// Boosters
+const BOOSTER_COUNT = 18;
+const BOOSTER_PICKUP_RADIUS = 2.2;
+const BOOSTER_RESPAWN_SEC = 8.0;
+const BOOSTER_NITRO_GAIN = 30; // +30 nitro per pickup
+
+const BOOSTER_MODEL_URL = "./models/booster.glb"; // you will put this file there
+let boosterTemplate = null;
+const boosters = []; // { pos: Vector3, mesh: Object3D, active: bool, respawnAt: number }
+
+let nitroFillEl = null;
+let nitroPctEl = null;
+
+// HUD refs
+let hudNitroFillEl, hudNitroTextEl;
+
+// Nitro key
+keys.nitro = false;
 
 // Track parameters
 const currentTrack = tracks.arena1;
@@ -146,6 +172,7 @@ const GATE_Z_MARGIN = 10;   // along-the-gate tolerance
 window.addEventListener("keydown", (e) => {
   if (e.code === "ArrowLeft" || e.code === "KeyA") keys.left = true;
   if (e.code === "ArrowRight" || e.code === "KeyD") keys.right = true;
+  if (e.code === "ShiftLeft" || e.code === "ShiftRight") keys.nitro = true;
 
   // Toggle cameras with C
   if (e.code === "KeyC") {
@@ -186,6 +213,8 @@ window.addEventListener("keydown", (e) => {
 window.addEventListener("keyup", (e) => {
   if (e.code === "ArrowLeft" || e.code === "KeyA") keys.left = false;
   if (e.code === "ArrowRight" || e.code === "KeyD") keys.right = false;
+  if (e.code === "ShiftLeft" || e.code === "ShiftRight") keys.nitro = false;
+
 });
 
 init();
@@ -296,12 +325,18 @@ function init() {
   hudCurLapEl   = document.getElementById("hudCurLap");
   hudBestLapEl  = document.getElementById("hudBestLap");
   hudRecordEl   = document.getElementById("hudRecord");
+  nitroFillEl = document.getElementById("nitroFill");
+  nitroPctEl  = document.getElementById("nitroPct");
+  hudNitroFillEl = document.getElementById("hudNitroFill");
+  hudNitroTextEl = document.getElementById("hudNitroText");
+
 
   showReadyToStartMessage();  // show "Press Q" on first load
   initGateFromPoints();
   // World
   loadArena();
   loadBike();
+  loadBoosters();
 
   createStartGate();
   console.log("Start gate at:", START_GATE_POS);
@@ -1098,7 +1133,7 @@ function updateHUD(dt) {
 
   // Lap + speed
   hudLapEl.textContent = lapCount.toString();
-  hudSpeedEl.textContent = `${Math.round(forwardSpeed)}`;
+  hudSpeedEl.textContent = `${Math.round(speedNow)}`;
 
   // Lap times
   if (currentLapStartTime !== null && gameState === GAME_STATE.PLAYING) {
@@ -1108,6 +1143,12 @@ function updateHUD(dt) {
   hudCurLapEl.textContent  = formatLapTime(currentLapTime);
   hudBestLapEl.textContent =
     bestLapTime === null ? "--.--" : formatLapTime(bestLapTime);
+  // Nitro UI
+
+  const pct = Math.round((nitro / NITRO_MAX) * 100);
+  if (hudNitroFillEl) hudNitroFillEl.style.width = `${pct}%`;
+  if (hudNitroTextEl) hudNitroTextEl.textContent = `${pct}%`;
+
 }
 
 function showNewRecordFlash() {
@@ -1117,6 +1158,162 @@ function showNewRecordFlash() {
   setTimeout(() => {
     hudRecordEl.classList.remove("visible");
   }, 1200);
+}
+
+function computeTrackLengths2D(points2D) {
+  const segLens = [];
+  let total = 0;
+  for (let i = 0; i < points2D.length - 1; i++) {
+    const a = points2D[i];
+    const b = points2D[i + 1];
+    const d = b.clone().sub(a).length();
+    segLens.push(d);
+    total += d;
+  }
+  return { segLens, total };
+}
+
+function samplePointAlongTrack(points2D, segLens, totalLen) {
+  // pick a random distance along the polyline
+  let r = Math.random() * totalLen;
+
+  let idx = 0;
+  while (idx < segLens.length && r > segLens[idx]) {
+    r -= segLens[idx];
+    idx++;
+  }
+  idx = Math.min(idx, segLens.length - 1);
+
+  const a = points2D[idx];
+  const b = points2D[idx + 1];
+  const t = segLens[idx] > 0 ? (r / segLens[idx]) : 0;
+
+  const center = a.clone().lerp(b, t); // Vector2
+  const tangent = b.clone().sub(a).normalize(); // Vector2
+  const normal = new THREE.Vector2(-tangent.y, tangent.x).normalize();
+
+  // random lateral offset inside lane
+  const maxOffset = TRACK_HALF_WIDTH * 0.75;
+  const offset = (Math.random() * 2 - 1) * maxOffset;
+
+  const pos2D = center.clone().add(normal.multiplyScalar(offset));
+
+  // yaw to roughly match track direction
+  const yaw = Math.atan2(tangent.x, tangent.y);
+
+  return { pos2D, yaw };
+}
+
+function setObjectOpacity(obj, opacity) {
+  obj.traverse((c) => {
+    if (c.isMesh && c.material) {
+      c.material.transparent = true;
+      c.material.opacity = opacity;
+      c.material.depthWrite = opacity >= 1.0;
+    }
+  });
+}
+
+function loadBoosters() {
+  const loader = new GLTFLoader();
+
+  loader.load(
+    BOOSTER_MODEL_URL,
+    (gltf) => {
+      boosterTemplate = gltf.scene;
+      boosterTemplate.traverse((c) => {
+        if (c.isMesh && c.material) {
+          c.castShadow = false;
+          c.receiveShadow = true;
+        }
+      });
+
+      spawnBoostersRandomly();
+    },
+    undefined,
+    (err) => {
+      console.warn("Booster model failed to load, using fallback box.", err);
+      boosterTemplate = null;
+      spawnBoostersRandomly();
+    }
+  );
+}
+
+function spawnBoostersRandomly() {
+  // clear old
+  for (const b of boosters) {
+    if (b.mesh) scene.remove(b.mesh);
+  }
+  boosters.length = 0;
+
+  const { segLens, total } = computeTrackLengths2D(trackPoints);
+
+  for (let i = 0; i < BOOSTER_COUNT; i++) {
+    const { pos2D, yaw } = samplePointAlongTrack(trackPoints, segLens, total);
+
+    const pos = new THREE.Vector3(pos2D.x, 0.2, pos2D.y);
+
+    let mesh;
+    if (boosterTemplate) {
+      mesh = boosterTemplate.clone(true);
+    } else {
+      // fallback if no model yet
+      mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(1.2, 1.2, 1.2),
+        new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x00ffff, emissiveIntensity: 1.5 })
+      );
+    }
+
+    mesh.position.copy(pos);
+    const BOOSTER_SCALE = 4.0;
+    mesh.scale.setScalar(BOOSTER_SCALE);
+    mesh.rotation.set(0, yaw, 0);
+    // mesh.scale.set(1, 1, 1);
+
+    scene.add(mesh);
+
+    boosters.push({
+      pos,
+      mesh,
+      active: true,
+      respawnAt: 0,
+    });
+  }
+}
+
+function updateBoosters() {
+  if (!bike || gameState !== GAME_STATE.PLAYING) return;
+
+  const now = clock.getElapsedTime();
+
+  const bikePos = new THREE.Vector3();
+  bike.getWorldPosition(bikePos);
+
+  for (const b of boosters) {
+    if (!b.mesh) continue;
+
+    if (!b.active) {
+      if (now >= b.respawnAt) {
+        b.active = true;
+        b.mesh.visible = true;
+        setObjectOpacity(b.mesh, 1.0);
+      }
+      continue;
+    }
+
+    const d = bikePos.distanceTo(b.pos);
+    if (d <= BOOSTER_PICKUP_RADIUS) {
+      // pickup
+      nitro = Math.min(NITRO_MAX, nitro + BOOSTER_NITRO_GAIN);
+
+      b.active = false;
+      b.respawnAt = now + BOOSTER_RESPAWN_SEC;
+
+      // hide / fade quickly
+      setObjectOpacity(b.mesh, 0.0);
+      b.mesh.visible = false;
+    }
+  }
 }
 
 
@@ -1205,11 +1402,21 @@ function animate() {
 
     // 2. Constant forward movement
     const forwardDir = new THREE.Vector3(0, 0, -1).applyQuaternion(bike.quaternion);
+    
+    let usingNitro = false;
+    let speedNow = forwardSpeed;
+
     if (gameState === GAME_STATE.PLAYING) {
-      bike.position.addScaledVector(forwardDir, forwardSpeed * gameDt);
-      // Apply track-edge bounce after moving
-      applyTrackBounce();
+      // Nitro drain/regen
+    if (keys.nitro && nitro > 0) {
+      usingNitro = true;
+      nitro = Math.max(0, nitro - NITRO_DRAIN_PER_SEC * rawDt);
+      speedNow = forwardSpeed + NITRO_SPEED_BONUS;
     }
+
+    bike.position.addScaledVector(forwardDir, speedNow * gameDt);
+    applyTrackBounce();
+    } 
 
     // 3. Hover effect
     const baseY = 0.7;
@@ -1229,6 +1436,7 @@ function animate() {
 
     // 5. Trail & collisions only while playing
     if (gameState === GAME_STATE.PLAYING) {
+      updateBoosters();
       updateTrail();
       updateLaps();
       handleCollisions();
