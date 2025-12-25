@@ -45,8 +45,11 @@ const BOOSTER_PICKUP_RADIUS = 2.2;
 const BOOSTER_RESPAWN_SEC = 8.0;
 const BOOSTER_NITRO_GAIN = 30; // +30 nitro per pickup
 
-const BOOSTER_MODEL_URL = "./models/booster.glb"; // you will put this file there
+const BOOSTER_MODEL_URL = "./public/models/energy_flash.glb"; // you will put this file there
 let boosterTemplate = null;
+let boosterTemplateReady = false; 
+let tutorialBooster = null;
+
 const boosters = []; // { pos: Vector3, mesh: Object3D, active: bool, respawnAt: number }
 
 let nitroFillEl = null;
@@ -80,6 +83,7 @@ const trailPositions = [];
 
 const GAME_STATE = {
   WAITING: "WAITING",
+  TUTORIAL: "TUTORIAL",
   COUNTDOWN: "COUNTDOWN",
   PLAYING: "PLAYING",
   CRASHED: "CRASHED",
@@ -287,7 +291,7 @@ function init() {
   camera = new THREE.PerspectiveCamera(70, width / height, 0.1, 5000);
   camera.position.set(0, 3, 15);
   camera.lookAt(0, 0.7, 0);
-
+  scene.add(camera);
   clock = new THREE.Clock();
 
   // Orbit controls (for debugging)
@@ -336,10 +340,10 @@ function init() {
   // World
   loadArena();
   loadBike();
-  loadBoosters();
+  loadBoosterModel();
 
   createStartGate();
-  console.log("Start gate at:", START_GATE_POS);
+  // console.log("Start gate at:", START_GATE_POS);
 
   // Postprocessing – bloom
   const renderScene = new RenderPass(scene, camera);
@@ -1214,27 +1218,33 @@ function setObjectOpacity(obj, opacity) {
   });
 }
 
-function loadBoosters() {
+function loadBoosterModel() {
   const loader = new GLTFLoader();
 
   loader.load(
     BOOSTER_MODEL_URL,
     (gltf) => {
       boosterTemplate = gltf.scene;
-      boosterTemplate.traverse((c) => {
-        if (c.isMesh && c.material) {
-          c.castShadow = false;
-          c.receiveShadow = true;
+
+      boosterTemplate.traverse((child) => {
+        if (child.isMesh && child.material) {
+          child.castShadow = false;
+          child.receiveShadow = false;
         }
       });
 
-      spawnBoostersRandomly();
+      boosterTemplate.scale.setScalar(4.0);
+
+      boosterTemplateReady = true;
+      console.log("Booster model loaded");
+      spawnBoostersRandomly(); // ✅ spawn AFTER it loads
     },
     undefined,
     (err) => {
-      console.warn("Booster model failed to load, using fallback box.", err);
+      console.error("Failed to load booster model:", err);
       boosterTemplate = null;
-      spawnBoostersRandomly();
+      boosterTemplateReady = false;
+      spawnBoostersRandomly(); // optional: spawn fallback cubes
     }
   );
 }
@@ -1256,19 +1266,28 @@ function spawnBoostersRandomly() {
     let mesh;
     if (boosterTemplate) {
       mesh = boosterTemplate.clone(true);
+      makeUniqueMaterials(mesh);
     } else {
       // fallback if no model yet
       mesh = new THREE.Mesh(
         new THREE.BoxGeometry(1.2, 1.2, 1.2),
-        new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x00ffff, emissiveIntensity: 1.5 })
+        new THREE.MeshStandardMaterial({
+          color: 0xff5503,
+          emissive: 0xff5503,
+          emissiveIntensity: 2.2
+          })
       );
     }
 
     mesh.position.copy(pos);
-    const BOOSTER_SCALE = 4.0;
+    const BOOSTER_SCALE = 6.0;
     mesh.scale.setScalar(BOOSTER_SCALE);
-    mesh.rotation.set(0, yaw, 0);
-    // mesh.scale.set(1, 1, 1);
+    mesh.userData.baseScale = mesh.scale.x;
+    mesh.userData.pulseAmp = 0.18;                 // 18% pulse
+    mesh.userData.pulseSpeed = 5.0;                // pulse frequency
+    mesh.userData.spinSpeed = 2.2;                 // radians/sec
+    mesh.userData.pulseOffset = Math.random() * Math.PI * 2;
+    // mesh.rotation.set(0, yaw, 0);
 
     scene.add(mesh);
 
@@ -1281,7 +1300,7 @@ function spawnBoostersRandomly() {
   }
 }
 
-function updateBoosters() {
+function updateBoosters(dt) {
   if (!bike || gameState !== GAME_STATE.PLAYING) return;
 
   const now = clock.getElapsedTime();
@@ -1291,12 +1310,24 @@ function updateBoosters() {
 
   for (const b of boosters) {
     if (!b.mesh) continue;
+    // Visual animation (spin + pulse)
+    const m = b.mesh;
+    if (b.active && m.visible) {
+      m.rotation.y += (m.userData.spinSpeed ?? 2.0) * dt;
 
+      const base = m.userData.baseScale ?? m.scale.x;
+      const amp  = m.userData.pulseAmp ?? 0.15;
+      const spd  = m.userData.pulseSpeed ?? 5.0;
+      const off  = m.userData.pulseOffset ?? 0.0;
+
+      const s = base * (1.0 + amp * Math.sin(now * spd + off));
+      m.scale.setScalar(s);
+    }
     if (!b.active) {
       if (now >= b.respawnAt) {
         b.active = true;
-        b.mesh.visible = true;
-        setObjectOpacity(b.mesh, 1.0);
+        m.visible = true;
+        setObjectOpacity(m, 1.0);
       }
       continue;
     }
@@ -1310,10 +1341,21 @@ function updateBoosters() {
       b.respawnAt = now + BOOSTER_RESPAWN_SEC;
 
       // hide / fade quickly
-      setObjectOpacity(b.mesh, 0.0);
-      b.mesh.visible = false;
+      setObjectOpacity(m, 0.0);
+      m.visible = false;
     }
   }
+}
+function makeUniqueMaterials(obj) {
+  obj.traverse((c) => {
+    if (!c.isMesh || !c.material) return;
+
+    if (Array.isArray(c.material)) {
+      c.material = c.material.map((m) => m.clone());
+    } else {
+      c.material = c.material.clone();
+    }
+  });
 }
 
 
@@ -1404,7 +1446,7 @@ function animate() {
     const forwardDir = new THREE.Vector3(0, 0, -1).applyQuaternion(bike.quaternion);
     
     let usingNitro = false;
-    let speedNow = forwardSpeed;
+    speedNow = forwardSpeed;
 
     if (gameState === GAME_STATE.PLAYING) {
       // Nitro drain/regen
@@ -1436,7 +1478,7 @@ function animate() {
 
     // 5. Trail & collisions only while playing
     if (gameState === GAME_STATE.PLAYING) {
-      updateBoosters();
+      updateBoosters(rawDt);
       updateTrail();
       updateLaps();
       handleCollisions();
