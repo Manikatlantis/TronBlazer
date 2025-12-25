@@ -200,13 +200,17 @@ window.addEventListener("keydown", (e) => {
 
   // Start / restart with Q
   if (e.code === "KeyQ") {
-    if (gameState === GAME_STATE.WAITING) {
-      startCountdown();   
-    } else if (gameState === GAME_STATE.CRASHED) {
-      resetGame();
-      startCountdown();
-    }
+  if (gameState === GAME_STATE.WAITING) {
+    enterTutorial();                 // ✅ step 2 screen
+  } else if (gameState === GAME_STATE.TUTORIAL) {
+    removeTutorialBooster();         // ✅ clean up orb
+    startCountdown();                // ✅ then countdown
+  } else if (gameState === GAME_STATE.CRASHED) {
+    resetGame();
+    enterTutorial();                 // ✅ show tutorial again after crash
   }
+}
+
    // Restart after crash
   if (e.code === "KeyR") {
     console.log("R pressed, resetting. state was:", gameState);
@@ -691,13 +695,6 @@ function hideOverlay() {
   }, 350);
 }
 
-function showReadyToStartMessage() {
-  if (!crashMessageEl) return;
-  crashTitleEl.textContent = "Ready to Ride";
-  crashSubtitleEl.innerHTML = `Press <span class="key">Q</span> to start`;
-  showOverlay();
-}
-
 function showCrashMessage() {
   if (!crashMessageEl) return;
   crashTitleEl.textContent = "You Crashed!!";
@@ -1089,6 +1086,8 @@ function resetGame() {
   bike.rotation.set(0, SPAWN_ROT_Y, 0);
 
   showReadyToStartMessage();   // back to "Press Q to start"
+  removeTutorialBooster();
+
 }
 
 function flashStartGate() {
@@ -1217,6 +1216,96 @@ function setObjectOpacity(obj, opacity) {
     }
   });
 }
+
+function showReadyToStartMessage() {
+  if (!crashMessageEl) return;
+
+  crashTitleEl.textContent = "READY TO RIDE";
+  crashSubtitleEl.innerHTML = `
+    <div class="overlay-stack">
+      <div class="overlay-primary">
+        Press <span class="key">Q</span> to start
+      </div>
+
+      <div class="overlay-divider"></div>
+
+      <div class="overlay-controls">
+        <div class="control">
+          <div class="control-label">Steer</div>
+          <div class="control-keys">
+            <span class="key">←</span><span class="key">A</span>
+            <span class="key">→</span><span class="key">D</span>
+          </div>
+        </div>
+
+        <div class="control">
+          <div class="control-label">Cameras</div>
+          <div class="control-keys">
+            <span class="key">V</span><span class="control-text">cinematic</span>
+            <span class="dot">•</span>
+            <span class="key">C</span><span class="control-text">free</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  showOverlay();
+}
+
+function showBoosterTutorialMessage() {
+  if (!crashMessageEl) return;
+
+  crashTitleEl.textContent = "Nitro Orbs";
+  crashSubtitleEl.innerHTML =
+    `Collect this orb to fill your <b>Nitro</b> bar.<br>` +
+    `Hold <span class="key">Shift</span> to boost speed while Nitro &gt; 0.<br><br>` +
+    `Press <span class="key">Q</span> to begin`;
+
+  showOverlay();
+}
+const TUTORIAL_ORB_SIDE = "right"; // "left" or "right"
+function createTutorialBooster() {
+  removeTutorialBooster();
+
+  let mesh;
+  if (boosterTemplate) {
+    mesh = boosterTemplate.clone(true);
+    makeUniqueMaterials(mesh); // ✅ from your earlier fix
+  } else {
+    // fallback: sphere (looks better than a cube)
+    mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.8, 24, 24),
+      new THREE.MeshStandardMaterial({
+        color: 0xff5503,
+        emissive: 0xff5503,
+        emissiveIntensity: 1.6,
+      })
+    );
+  }
+
+  // Attach to camera so it always stays in view
+  camera.add(mesh);
+  const side = (TUTORIAL_ORB_SIDE === "left") ? -1 : 1;
+  mesh.position.set(-8 * side, -10.2, -7);  // in front of camera
+  mesh.scale.setScalar(2.6);
+
+  tutorialBooster = mesh;
+}
+
+function removeTutorialBooster() {
+  if (!tutorialBooster) return;
+  tutorialBooster.parent?.remove(tutorialBooster);
+  tutorialBooster = null;
+}
+
+function enterTutorial() {
+  gameState = GAME_STATE.TUTORIAL;
+  timeScale = 1.0;
+  showBoosterTutorialMessage();
+  createTutorialBooster();
+}
+
 
 function loadBoosterModel() {
   const loader = new GLTFLoader();
@@ -1366,6 +1455,14 @@ function animate() {
   const gameDt = rawDt * timeScale;    // slowed during crash
   const t = clock.getElapsedTime();    // total time
   cinematicTime += rawDt;              // drives cinematic camera motion
+
+  if (gameState === GAME_STATE.TUTORIAL && tutorialBooster) {
+  tutorialBooster.rotation.y += rawDt * 1.8;
+  tutorialBooster.rotation.x += rawDt * 0.6;
+  // subtle hover
+  tutorialBooster.position.y = -0.2 + Math.sin(t * 2.0) * 0.15;
+}
+
 
   // drive the water-like ripple on the trail
   if (trailMaterial && trailMaterial.uniforms && trailMaterial.uniforms.uTime) {

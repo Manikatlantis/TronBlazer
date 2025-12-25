@@ -138,6 +138,13 @@ button:focus-visible {
   visibility: visible;
 }
 
+#crashMessage .card {
+  width: min(520px, 92vw);
+  padding: 26px 28px;
+  border-radius: 18px;
+  backdrop-filter: blur(18px);
+}
+
 /* Inner content */
 #crashMessage .crash-inner {
   text-align: center;
@@ -174,6 +181,92 @@ button:focus-visible {
   background: rgba(10, 5, 2, 0.7);
   box-shadow: 0 0 12px rgba(255, 140, 60, 0.7);
   font-family: monospace;
+}
+
+#crashTitle {
+  letter-spacing: 0.18em;
+  font-weight: 700;
+  font-size: 40px;
+  margin-bottom: 10px;
+}
+
+/* Keep subtitle container clean */
+#crashSubtitle {
+  font-size: 18px;
+  line-height: 1.35;
+  opacity: 0.92;
+}
+
+.overlay-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.overlay-primary {
+  font-size: 18px;
+  opacity: 0.92;
+}
+
+/* Divider to reduce “blob of text” feeling */
+.overlay-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.14);
+  margin: 2px 0;
+}
+
+/* Controls grid: clean + aligned */
+.overlay-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 18px;
+}
+
+.control-label {
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0.65;
+  margin-bottom: 8px;
+}
+
+.control-keys {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Keycaps consistent size */
+.key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 180, 120, 0.55);
+  background: rgba(0, 0, 0, 0.22);
+  box-shadow: 0 0 14px rgba(255, 120, 40, 0.25);
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.control-text {
+  opacity: 0.82;
+  font-size: 15px;
+}
+
+.dot {
+  opacity: 0.35;
+  margin: 0 2px;
+}
+
+/* Mobile: stack controls */
+@media (max-width: 520px) {
+  .overlay-controls {
+    grid-template-columns: 1fr;
+  }
 }
 
 #hud {
