@@ -1,4 +1,3 @@
-// import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js";
 import * as THREE from "three";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
@@ -50,19 +49,12 @@ const BOOSTER_NITRO_GAIN = 30; // +30 nitro per pickup
 
 const BOOSTER_MODEL_URL = "./public/models/energy_flash.glb"; // you will put this file there
 let boosterTemplate = null;
-let boosterTemplateReady = false; 
 let tutorialBooster = null;
 
 const boosters = []; // { pos: Vector3, mesh: Object3D, active: bool, respawnAt: number }
 
-let nitroFillEl = null;
-let nitroPctEl = null;
-
 // HUD refs
 let hudNitroFillEl, hudNitroTextEl;
-
-// Nitro key
-keys.nitro = false;
 
 // Track parameters
 const currentTrack = tracks.arena1;
@@ -336,8 +328,6 @@ function init() {
   hudCurLapEl   = document.getElementById("hudCurLap");
   hudBestLapEl  = document.getElementById("hudBestLap");
   hudRecordEl   = document.getElementById("hudRecord");
-  nitroFillEl = document.getElementById("nitroFill");
-  nitroPctEl  = document.getElementById("nitroPct");
   hudNitroFillEl = document.getElementById("hudNitroFill");
   hudNitroTextEl = document.getElementById("hudNitroText");
 
@@ -1109,7 +1099,7 @@ function resetGame() {
   lastGhostSampleTime = 0;
   ghostTrailPositions.length = 0;
   ghostTrailSegments.length = 0;
-  
+
   if (ghostTrailMesh && ghostBike) {
   ghostTrailMesh.geometry.dispose();
   const p0 = ghostBike.position.clone();
@@ -1261,10 +1251,7 @@ function samplePointAlongTrack(points2D, segLens, totalLen) {
 
   const pos2D = center.clone().add(normal.multiplyScalar(offset));
 
-  // yaw to roughly match track direction
-  const yaw = Math.atan2(tangent.x, tangent.y);
-
-  return { pos2D, yaw };
+  return { pos2D };
 }
 
 function setObjectOpacity(obj, opacity) {
@@ -1383,8 +1370,6 @@ function loadBoosterModel() {
       });
 
       boosterTemplate.scale.setScalar(4.0);
-
-      boosterTemplateReady = true;
       console.log("Booster model loaded");
       spawnBoostersRandomly(); // ✅ spawn AFTER it loads
     },
@@ -1392,7 +1377,6 @@ function loadBoosterModel() {
     (err) => {
       console.error("Failed to load booster model:", err);
       boosterTemplate = null;
-      boosterTemplateReady = false;
       spawnBoostersRandomly(); // optional: spawn fallback cubes
     }
   );
@@ -1408,7 +1392,7 @@ function spawnBoostersRandomly() {
   const { segLens, total } = computeTrackLengths2D(trackPoints);
 
   for (let i = 0; i < BOOSTER_COUNT; i++) {
-    const { pos2D, yaw } = samplePointAlongTrack(trackPoints, segLens, total);
+    const { pos2D } = samplePointAlongTrack(trackPoints, segLens, total);
 
     const pos = new THREE.Vector3(pos2D.x, 0.2, pos2D.y);
 
@@ -1606,20 +1590,16 @@ function animate() {
     // 2. Constant forward movement
     const forwardDir = new THREE.Vector3(0, 0, -1).applyQuaternion(bike.quaternion);
     
-    let usingNitro = false;
     speedNow = forwardSpeed;
 
     if (gameState === GAME_STATE.PLAYING) {
-      // Nitro drain/regen
-    if (keys.nitro && nitro > 0) {
-      usingNitro = true;
-      nitro = Math.max(0, nitro - NITRO_DRAIN_PER_SEC * rawDt);
-      speedNow = forwardSpeed + NITRO_SPEED_BONUS;
+      if (keys.nitro && nitro > 0) {
+        nitro = Math.max(0, nitro - NITRO_DRAIN_PER_SEC * rawDt);
+        speedNow = forwardSpeed + NITRO_SPEED_BONUS;
+      }
+      bike.position.addScaledVector(forwardDir, speedNow * gameDt);
+      applyTrackBounce();
     }
-
-    bike.position.addScaledVector(forwardDir, speedNow * gameDt);
-    applyTrackBounce();
-    } 
 
     // 3. Hover effect
     const baseY = 0.7;
