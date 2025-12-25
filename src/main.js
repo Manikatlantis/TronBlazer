@@ -32,6 +32,9 @@ let countdownSprite = null;
 let countdownSpritePhase = 0;
 let countdownSpriteBaseScale = 45;
 let speedNow = 0;
+let ghostTrailMaterial, ghostTrailMesh;
+const ghostTrailPositions = [];
+const ghostTrailSegments = [];   // optional if you ever want ghost collisions
 
 // NITRO
 let nitro = 0;                 // current amount
@@ -416,13 +419,15 @@ function loadBike() {
       // -------------------------
 
       bikeReady = true;
-      createTrail();
+      createPlayerTrail();
+      createGhostTrail();
     },
     undefined,
     (error) => {
       console.error("Error loading lightcycle:", error);
     }
   );
+
 }
 
 let arena;
@@ -495,13 +500,13 @@ function loadArena() {
 }
 
 
-function createTrail() {
-  trailMaterial = new THREE.ShaderMaterial({
+function makeTrailMaterial(coreHex, edgeHex, opacity = 0.55) {
+  const mat = new THREE.ShaderMaterial({
     uniforms: {
       uTime:      { value: 0.0 },
-      uColorCore: { value: new THREE.Color(0xff5503) }, // bright inner glow
-      uColorEdge: { value: new THREE.Color(0xff5503) }, // red/orange edges
-      uOpacity:   { value: 0.5 },
+      uColorCore: { value: new THREE.Color(coreHex) }, // bright inner glow
+      uColorEdge: { value: new THREE.Color(edgeHex) }, // red/orange edges
+      uOpacity:   { value: opacity },
       uFadePower:   { value: 1.5 },   // controls how quickly the tail disappears
     },
     vertexShader: `
@@ -596,22 +601,32 @@ function createTrail() {
     transparent: true,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
+    depthTest: false,
     side: THREE.DoubleSide,
   });
+  return mat;
+}
 
+function makeTrailMeshFor(obj, material) {
   // Tiny initial tube so the mesh exists
-  const p0 = bike.position.clone();
-  const p1 = bike.position.clone().add(new THREE.Vector3(0, 0, -1));
+  const p0 = obj.position.clone();
+  const p1 = obj.position.clone().add(new THREE.Vector3(0, 0, -1));
   const curve = new THREE.CatmullRomCurve3([p0, p1]);
+  const geo = new THREE.TubeGeometry(curve, 32, 0.8, 24, false);
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.scale.set(1.0, 1.8, 1.0);
+  scene.add(mesh);
+  return mesh;
+}
 
-  const tubeGeo = new THREE.TubeGeometry(curve, 32, 0.8, 24, false);
-  trailMaterial.uniforms.uFadePower.value = 0.6; // softer tail
-  trailMesh = new THREE.Mesh(tubeGeo, trailMaterial);
+function createPlayerTrail() {
+  trailMaterial = makeTrailMaterial(0xff5503, 0xff5503, 0.55);
+  trailMesh = makeTrailMeshFor(bike, trailMaterial);
+}
 
-  // Flatten into tall rectangular "wall"
-  trailMesh.scale.set(1.0, 1.8, 1.0);
-
-  scene.add(trailMesh);
+function createGhostTrail() {
+  ghostTrailMaterial = makeTrailMaterial(0x00ffff, 0x00aaff, 0.35);
+  ghostTrailMesh = makeTrailMeshFor(ghostBike, ghostTrailMaterial);
 }
 
 function updateTrail() {
@@ -693,6 +708,42 @@ function hideOverlay() {
       crashMessageEl.style.visibility = "hidden";
     }
   }, 350);
+}
+
+function getTrailSamplePointFor(obj, back = 2.5, yOffset = 0.4) {
+  const pos = new THREE.Vector3();
+  obj.getWorldPosition(pos);
+
+  const forward = new THREE.Vector3(0, 0, -1)
+    .applyQuaternion(obj.quaternion)
+    .normalize();
+
+  const sample = pos.clone().addScaledVector(forward, -back);
+  sample.y = pos.y + yOffset; // raise if your floor clips it
+  return sample;
+}
+
+function updateTrailFor(obj, mesh, positionsArr, segmentsArr) {
+  if (!obj || !mesh) return;
+
+  const point = getTrailSamplePointFor(obj, 2.5, 0.4);
+  positionsArr.push(point.clone());
+
+  if (positionsArr.length > MAX_TRAIL_POINTS) positionsArr.shift();
+
+  if (positionsArr.length >= 2) {
+    const len = positionsArr.length;
+    segmentsArr.push({ start: positionsArr[len - 2].clone(), end: positionsArr[len - 1].clone() });
+    if (segmentsArr.length > MAX_TRAIL_POINTS) segmentsArr.shift();
+  }
+
+  if (positionsArr.length < 2) return;
+
+  const curve = new THREE.CatmullRomCurve3(positionsArr);
+  const tubularSegments = Math.max(2, positionsArr.length * 3);
+
+  mesh.geometry.dispose();
+  mesh.geometry = new THREE.TubeGeometry(curve, tubularSegments, 0.8, 24, false);
 }
 
 function showCrashMessage() {
@@ -1056,7 +1107,16 @@ function resetGame() {
     ghostBike.visible = false;
   }
   lastGhostSampleTime = 0;
-
+  ghostTrailPositions.length = 0;
+  ghostTrailSegments.length = 0;
+  
+  if (ghostTrailMesh && ghostBike) {
+  ghostTrailMesh.geometry.dispose();
+  const p0 = ghostBike.position.clone();
+  const p1 = ghostBike.position.clone().add(new THREE.Vector3(0, 0, -1));
+  const curve = new THREE.CatmullRomCurve3([p0, p1]);
+  ghostTrailMesh.geometry = new THREE.TubeGeometry(curve, 32, 0.8, 24, false);
+  }
 
   // reset current lap timing, keep bestLapTime as "record"
   currentLapStartTime = null;
@@ -1468,6 +1528,10 @@ function animate() {
   if (trailMaterial && trailMaterial.uniforms && trailMaterial.uniforms.uTime) {
     trailMaterial.uniforms.uTime.value = t;
   }
+  
+  if (ghostTrailMaterial && ghostTrailMaterial.uniforms?.uTime) {
+  ghostTrailMaterial.uniforms.uTime.value = t;
+  }
 
   if (bikeReady && bike) {
     // 1. Turn left/right only while playing
@@ -1614,6 +1678,9 @@ function animate() {
 
         ghostBike.position.copy(f0.pos).lerp(f1.pos, alpha);
         ghostBike.rotation.y = THREE.MathUtils.lerp(f0.rotY, f1.rotY, alpha);
+        if (ghostBike.visible) {
+          updateTrailFor(ghostBike, ghostTrailMesh, ghostTrailPositions, ghostTrailSegments);
+        }
       }
     } else if (ghostBike && !ghostActive) {
       ghostBike.visible = false;
