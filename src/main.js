@@ -5,6 +5,12 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { tracks } from "./tracks.js";
+import { createAudioManager } from "./audio.js";
+
+let audioMgr;
+let audioStarted = false;
+let wasUsingNitro = false;
+let engineStarted = false;
 
 // SPAWN POINT
 const SPAWN_POS = new THREE.Vector3(0, 0.9, 2500);
@@ -43,7 +49,7 @@ const NITRO_SPEED_BONUS = 300;   // added to forwardSpeed while nitro active
 
 // Boosters
 const BOOSTER_COUNT = 18;
-const BOOSTER_PICKUP_RADIUS = 2.2;
+const BOOSTER_PICKUP_RADIUS = 4.2;
 const BOOSTER_RESPAWN_SEC = 8.0;
 const BOOSTER_NITRO_GAIN = 30; // +30 nitro per pickup
 
@@ -55,6 +61,13 @@ const boosters = []; // { pos: Vector3, mesh: Object3D, active: bool, respawnAt:
 
 // HUD refs
 let hudNitroFillEl, hudNitroTextEl;
+// === MINIMAP ===
+let minimapCanvas, minimapCtx;
+const MINIMAP_SIZE = 150;     // CSS px
+const MINIMAP_PAD = 14;       // inner padding
+let minimapBounds = { minX: 0, maxX: 1, minZ: 0, maxZ: 1 };
+let minimapTrackCache = [];   // cached screen-space polyline points
+let minimapGateCache = null;  // cached gate line endpoints in minimap space
 
 // Track parameters
 const currentTrack = tracks.arena1;
@@ -195,7 +208,10 @@ window.addEventListener("keydown", (e) => {
 
   // Start / restart with Q
   if (e.code === "KeyQ") {
+     audioMgr?.resumeContextIfNeeded();
+  
   if (gameState === GAME_STATE.WAITING) {
+    audioMgr?.startBgm();     // ✅ start music on first Q
     enterTutorial();                 // ✅ step 2 screen
   } else if (gameState === GAME_STATE.TUTORIAL) {
     removeTutorialBooster();         // ✅ clean up orb
@@ -267,6 +283,228 @@ function initGateFromPoints() {
   );
 }
 
+function initMinimap() {
+  minimapCanvas = document.getElementById("minimap");
+  if (!minimapCanvas) {
+    minimapCanvas = document.createElement("canvas");
+    minimapCanvas.id = "minimap";
+    document.body.appendChild(minimapCanvas);
+  }
+
+  minimapCtx = minimapCanvas.getContext("2d");
+
+  resizeMinimap();
+  buildMinimapCache();
+
+  window.addEventListener("resize", () => {
+    resizeMinimap();
+    buildMinimapCache();
+  });
+}
+
+function resizeMinimap() {
+  if (!minimapCanvas || !minimapCtx) return;
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  minimapCanvas.style.width = `${MINIMAP_SIZE}px`;
+  minimapCanvas.style.height = `${MINIMAP_SIZE}px`;
+
+  minimapCanvas.width = Math.floor(MINIMAP_SIZE * dpr);
+  minimapCanvas.height = Math.floor(MINIMAP_SIZE * dpr);
+
+  minimapCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function computeMinimapBounds() {
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+
+  for (const p of trackPoints) {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minZ = Math.min(minZ, p.y); // p.y is Z
+    maxZ = Math.max(maxZ, p.y);
+  }
+
+  // pad a bit so the track isn't glued to the edges
+  const padX = (maxX - minX) * 0.08 + 1e-6;
+  const padZ = (maxZ - minZ) * 0.08 + 1e-6;
+
+  minimapBounds = {
+    minX: minX - padX,
+    maxX: maxX + padX,
+    minZ: minZ - padZ,
+    maxZ: maxZ + padZ,
+  };
+}
+
+function worldToMinimapXZ(x, z) {
+  // map world XZ into minimap canvas coordinates (top-left origin)
+  const W = MINIMAP_SIZE;
+  const H = MINIMAP_SIZE;
+
+  const innerW = W - MINIMAP_PAD * 2;
+  const innerH = H - MINIMAP_PAD * 2;
+
+  const nx = (x - minimapBounds.minX) / (minimapBounds.maxX - minimapBounds.minX);
+  const nz = (z - minimapBounds.minZ) / (minimapBounds.maxZ - minimapBounds.minZ);
+
+  // keep aspect by using the same scale for both axes
+  const s = Math.min(innerW, innerH);
+
+  const ox = MINIMAP_PAD + (innerW - s) * 0.5;
+  const oy = MINIMAP_PAD + (innerH - s) * 0.5;
+
+  const px = ox + nx * s;
+  const py = oy + (1 - nz) * s; // invert Z so +Z is up
+
+  return { x: px, y: py };
+}
+
+function buildMinimapCache() {
+  computeMinimapBounds();
+
+  // cache track polyline in minimap pixels
+  minimapTrackCache = trackPoints.map((p) => worldToMinimapXZ(p.x, p.y));
+
+  // cache gate as a line from first->last point
+  const g0 = GATE_POINTS[0];
+  const g1 = GATE_POINTS[GATE_POINTS.length - 1];
+  minimapGateCache = {
+    a: worldToMinimapXZ(g0.x, g0.y),
+    b: worldToMinimapXZ(g1.x, g1.y),
+  };
+}
+
+function drawArrow(ctx, x, y, angleRad, size) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angleRad);
+
+  ctx.beginPath();
+  ctx.moveTo(0, -size);
+  ctx.lineTo(size * 0.65, size);
+  ctx.lineTo(0, size * 0.55);
+  ctx.lineTo(-size * 0.65, size);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function updateMinimap() {
+  if (!minimapCtx || !minimapCanvas) return;
+
+  // Optional: hide minimap during overlays if you want
+  // if (gameState === GAME_STATE.WAITING || gameState === GAME_STATE.TUTORIAL) return;
+
+  const ctx = minimapCtx;
+
+  // Clear
+  ctx.clearRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
+
+  // Background plate (in case CSS bg is missing)
+  ctx.fillStyle = "rgba(0,0,0,0.28)";
+  ctx.fillRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
+
+  // Track polyline
+  if (minimapTrackCache.length >= 2) {
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(0,255,255,0.65)";
+    ctx.beginPath();
+    ctx.moveTo(minimapTrackCache[0].x, minimapTrackCache[0].y);
+    for (let i = 1; i < minimapTrackCache.length; i++) {
+      ctx.lineTo(minimapTrackCache[i].x, minimapTrackCache[i].y);
+    }
+    ctx.stroke();
+  }
+
+  // Gate line
+  if (minimapGateCache) {
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(255,220,120,0.28)";
+    ctx.beginPath();
+    ctx.moveTo(minimapGateCache.a.x, minimapGateCache.a.y);
+    ctx.lineTo(minimapGateCache.b.x, minimapGateCache.b.y);
+    ctx.stroke();
+  }
+
+  // Boosters (active only)
+  ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+  for (const b of boosters) {
+    if (!b?.mesh) continue;
+    if (!b.active) continue;
+    if (!b.mesh.visible) continue;
+
+    const p = worldToMinimapXZ(b.pos.x, b.pos.z);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 3.3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Player trail (very faint) — optional, cheap
+  if (trailPositions.length > 2) {
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(255, 85, 3, 0.20)";
+    ctx.beginPath();
+    const p0 = worldToMinimapXZ(trailPositions[0].x, trailPositions[0].z);
+    ctx.moveTo(p0.x, p0.y);
+    for (let i = 1; i < trailPositions.length; i++) {
+      const p = worldToMinimapXZ(trailPositions[i].x, trailPositions[i].z);
+      ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+  }
+
+  function getHeadingAngleFromObject(obj) {
+  // Bike forward = local -Z, projected into XZ
+  const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(obj.quaternion);
+  fwd.y = 0;
+  if (fwd.lengthSq() < 1e-6) return 0;
+  fwd.normalize();
+
+  // In our minimap mapping, +Z is "up", so:
+  // angle=0 => up, +pi/2 => right, pi => down, etc.
+  return Math.atan2(fwd.x, fwd.z);
+}
+
+// Ghost
+if (ghostBike && ghostBike.visible) {
+  const gp = worldToMinimapXZ(ghostBike.position.x, ghostBike.position.z);
+  const gAng = getHeadingAngleFromObject(ghostBike);
+
+  ctx.fillStyle = "rgba(0,255,255,0.85)";
+  drawArrow(ctx, gp.x, gp.y, gAng, 7);
+
+  // dot for extra clarity
+  ctx.fillStyle = "rgba(0,255,255,0.55)";
+  ctx.beginPath();
+  ctx.arc(gp.x, gp.y, 2.0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// Player
+if (bike) {
+  const bp = worldToMinimapXZ(bike.position.x, bike.position.z);
+  const bAng = getHeadingAngleFromObject(bike);
+
+  ctx.fillStyle = "rgba(255, 85, 3, 0.95)";
+  drawArrow(ctx, bp.x, bp.y, bAng, 8);
+
+  // strong dot (always readable)
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.beginPath();
+  ctx.arc(bp.x, bp.y, 2.2, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+
+  // Border glow (if CSS border missing)
+  ctx.strokeStyle = "rgba(0,255,255,0.18)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, MINIMAP_SIZE - 1, MINIMAP_SIZE - 1);
+}
+
 
 function init() {
   const width = window.innerWidth;
@@ -304,7 +542,10 @@ function init() {
     0.35        // intensity (keep low)
   );
   scene.add(hemiLight);
-
+  
+  audioMgr = createAudioManager(camera);
+  audioMgr.load();
+  
   // Teal key light from above/front to highlight track curves
   const keyLight = new THREE.DirectionalLight(0x55ffee, 0.5);
   keyLight.position.set(30, 50, 40);
@@ -331,7 +572,7 @@ function init() {
   hudNitroFillEl = document.getElementById("hudNitroFill");
   hudNitroTextEl = document.getElementById("hudNitroText");
 
-
+  initMinimap();
   showReadyToStartMessage();  // show "Press Q" on first load
   initGateFromPoints();
   // World
@@ -1072,6 +1313,8 @@ function handleCollisions() {
   if (checkTrailCollision() || checkWallCollision()) {
     // trigger crash
     gameState = GAME_STATE.CRASHED;
+    audioMgr?.setWhoosh(false); // ✅ stop immediately
+    engineStarted = false;   // lets GO restart engine cleanly
     showCrashMessage();  
     console.log("CRASH!");
   }
@@ -1137,6 +1380,8 @@ function resetGame() {
 
   showReadyToStartMessage();   // back to "Press Q to start"
   removeTutorialBooster();
+  engineStarted = false;
+  audioMgr?.setWhoosh(false);
 
 }
 
@@ -1469,7 +1714,7 @@ function updateBoosters(dt) {
     if (d <= BOOSTER_PICKUP_RADIUS) {
       // pickup
       nitro = Math.min(NITRO_MAX, nitro + BOOSTER_NITRO_GAIN);
-
+      audioMgr.playPickup();
       b.active = false;
       b.respawnAt = now + BOOSTER_RESPAWN_SEC;
 
@@ -1570,7 +1815,6 @@ function animate() {
         countdownSprite.material.dispose();
         countdownSprite = null;
       }
-
       startGame();  // your existing function that sets PLAYING, starts lap timer
     }
   }
@@ -1589,7 +1833,7 @@ function animate() {
 
     // 2. Constant forward movement
     const forwardDir = new THREE.Vector3(0, 0, -1).applyQuaternion(bike.quaternion);
-    
+    let usingNitro = false;
     speedNow = forwardSpeed;
 
     if (gameState === GAME_STATE.PLAYING) {
@@ -1601,11 +1845,21 @@ function animate() {
       applyTrackBounce();
     }
 
-    // 3. Hover effect
+    // play nitro whoosh on *start* of nitro (edge trigger)
+    if (usingNitro && !wasUsingNitro) audioMgr.playNitro();
+    wasUsingNitro = usingNitro;
+
+    audioMgr?.update({
+      holdingNitro: keys.nitro,
+      nitroAmount: nitro,
+      gameState: gameState,
+      });
+
+    //  Hover effect
     const baseY = 0.7;
     bike.position.y = baseY + Math.sin(t * 2.0) * 0.05;
 
-    // 4. Lean
+    //  Lean
     let targetLean = 0;
     if (!DEBUG_FREE_CAMERA) {
       if (keys.left)  targetLean =  MAX_LEAN;
@@ -1733,5 +1987,6 @@ function animate() {
     if (DEBUG_FREE_CAMERA && controls) controls.update();
   }
   updateHUD(rawDt);
+  updateMinimap();
   composer.render(scene, camera);
 }
