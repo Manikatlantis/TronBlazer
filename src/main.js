@@ -5,7 +5,10 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { tracks } from "./tracks.js";
+import { getTrackBounds } from "./track_bounds.js";
 import { createAudioManager } from "./audio.js";
+import { createEnvironment } from "./environment.js";
+
 
 let audioMgr;
 let audioStarted = false;
@@ -21,6 +24,7 @@ const LEAN_SMOOTH = 0.04;  // 0–1, higher = snappier
 const TURN_SPEED  = Math.PI * 0.5;  // radians per second for left/right turning
 
 let renderer, scene, camera, composer, clock;
+let env = null;
 let bike;
 let bikeReady = false;
 let controls;
@@ -120,11 +124,23 @@ const TRAIL_RADIUS = 0.9; // match-ish your visible radius
 // simple arena bounds for now 
 let ARENA_HALF_SIZE_X = 80;
 let ARENA_HALF_SIZE_Z = 80;
+let ARENA_CENTER_X = 0;
+let ARENA_CENTER_Z = 0;
+
+const t = tracks.arena1;
+const B = getTrackBounds(t.points, t.halfWidth, 120);
+
+ARENA_HALF_SIZE_X = B.halfX;
+ARENA_HALF_SIZE_Z = B.halfZ;
+
+ARENA_CENTER_X = B.cx;
+ARENA_CENTER_Z = B.cz;
 
 let startGateMesh;
 let lapCount = 0;
 
 let currentLapStartTime = null; // when current lap began (clock time)
+let lapTimerArmed = false; // first valid gate crossing starts timing, not a lap finish
 let currentLapTime = 0;        // seconds
 let bestLapTime = null;        // null until first completed lap
 let lastLapCrossTime = 0;
@@ -141,8 +157,9 @@ const p1 = trackPoints[1];          // Vector2
 let bestLapGhostFrames = []; // [{ t, pos: THREE.Vector3, rotY: number }]
 let currentLapFrames    = [];
 let ghostBike = null;
+let ghostTimeScale = 0.89; // < 1.0 slows ghost, > 1.0 speeds it up
 let ghostActive = false;
-const GHOST_SAMPLE_INTERVAL = 0.05; // seconds between recorded frames
+const GHOST_SAMPLE_INTERVAL = 1 / 60; // seconds between recorded frames
 let lastGhostSampleTime = 0;
 
 // direction along the track near spawn (XZ)
@@ -227,6 +244,15 @@ window.addEventListener("keydown", (e) => {
     console.log("R pressed, resetting. state was:", gameState);
     resetGame();
   }
+  if (e.code === "BracketLeft") { // [
+  ghostTimeScale = Math.max(0.5, ghostTimeScale - 0.01);
+  console.log("ghostTimeScale:", ghostTimeScale.toFixed(3));
+  }
+  if (e.code === "BracketRight") { // ]
+    ghostTimeScale = Math.min(1.5, ghostTimeScale + 0.01);
+    console.log("ghostTimeScale:", ghostTimeScale.toFixed(3));
+  }
+
 });
 
 window.addEventListener("keyup", (e) => {
@@ -521,6 +547,8 @@ function init() {
 
   // Scene
   scene = new THREE.Scene();
+  env = createEnvironment(scene, renderer);
+  env?.setBounds(ARENA_HALF_SIZE_X, ARENA_HALF_SIZE_Z);
   scene.background = new THREE.Color(0x020308);
   scene.fog = null;
 
@@ -667,16 +695,16 @@ function addArenaRimLightsAtCorners() {
   const height = 30; // how high above the arena the lights sit
 
   const cornerPositions = [
-    [  ARENA_HALF_SIZE_X, height,  ARENA_HALF_SIZE_Z],
-    [ -ARENA_HALF_SIZE_X, height,  ARENA_HALF_SIZE_Z],
-    [  ARENA_HALF_SIZE_X, height, -ARENA_HALF_SIZE_Z],
-    [ -ARENA_HALF_SIZE_X, height, -ARENA_HALF_SIZE_Z],
+    [ARENA_CENTER_X + ARENA_HALF_SIZE_X, height, ARENA_CENTER_Z + ARENA_HALF_SIZE_Z],
+    [ARENA_CENTER_X - ARENA_HALF_SIZE_X, height, ARENA_CENTER_Z + ARENA_HALF_SIZE_Z],
+    [ARENA_CENTER_X + ARENA_HALF_SIZE_X, height, ARENA_CENTER_Z - ARENA_HALF_SIZE_Z],
+    [ARENA_CENTER_X - ARENA_HALF_SIZE_X, height, ARENA_CENTER_Z - ARENA_HALF_SIZE_Z],
   ];
 
   cornerPositions.forEach(([x, y, z]) => {
     const light = new THREE.DirectionalLight(0x33ddff, 0.5); // teal, a bit brighter
     light.position.set(x, y, z);
-    light.target.position.set(0, 0, 0);       // aim at center of arena
+    light.target.position.set(ARENA_CENTER_X, 0, ARENA_CENTER_Z);       // aim at center of arena
     scene.add(light);
     scene.add(light.target);
   });
@@ -720,6 +748,8 @@ function loadArena() {
       ARENA_HALF_SIZE_Z = (size.z * 0.7) * 0.9;
 
       console.log("Arena bounds:", ARENA_HALF_SIZE_X, ARENA_HALF_SIZE_Z);
+      // ✅ Spread environment across the arena 
+      env?.setBounds(ARENA_HALF_SIZE_X, ARENA_HALF_SIZE_Z);
       // teal rim lights at the four corners
       addArenaRimLightsAtCorners();
     },
@@ -1209,14 +1239,30 @@ function updateLaps() {
 
     // > 0 → roughly forward; tweak 0.1 if needed
     if (forwardDot > 0.1) {
-      lapCount++;
       lastLapCrossTime = now;
-      console.log("Lap:", lapCount);
+      // console.log("Lap:", lapCount);
       flashStartGate();
 
-      if (currentLapStartTime !== null) {
-  const finishedLapTime = now - currentLapStartTime;
-  currentLapTime = finishedLapTime;
+    // ✅ First time crossing after GO: start timing, don't count a lap
+    if (!lapTimerArmed) {
+      lapTimerArmed = true;
+      currentLapStartTime = now;
+      currentLapTime = 0;
+
+      currentLapFrames = [];
+      lastGhostSampleTime = 0;
+      lastGateSide = side;
+      console.log("Lap timer armed at gate. Next crossing will complete Lap 1.");
+      return;
+    }
+
+    // ✅ Normal lap completion
+    lapCount++;
+    console.log("Lap:", lapCount);
+
+    if (currentLapStartTime !== null) {
+      const finishedLapTime = now - currentLapStartTime;
+      currentLapTime = finishedLapTime;
 
   if (finishedLapTime >= MIN_VALID_LAP_TIME) {
     // New record?
@@ -1230,6 +1276,7 @@ function updateLaps() {
         pos: f.pos.clone(),
         rotY: f.rotY,
       }));
+      
       ghostActive = bestLapGhostFrames.length > 1;
       if (ghostBike && ghostActive) ghostBike.visible = true;
     }
@@ -1240,13 +1287,11 @@ function updateLaps() {
 currentLapStartTime = now;
 currentLapFrames = [];
 lastGhostSampleTime = 0;
-
-      currentLapStartTime = now; // start timing next lap
-    } else {
-      // going backwards through the gate → ignore
-      console.log("Crossed gate but facing backwards, no lap");
-    }
+} else {
+  // going backwards through the gate → ignore
+  console.log("Crossed gate but facing backwards, no lap");
   }
+}
 
   // Update side only while near gate
   lastGateSide = side;
@@ -1256,10 +1301,12 @@ lastGhostSampleTime = 0;
 function checkWallCollision() {
   const bikePos = new THREE.Vector3();
   bike.getWorldPosition(bikePos);
+  const dx = bikePos.x - ARENA_CENTER_X;
+  const dz = bikePos.z - ARENA_CENTER_Z;
 
   return (
-    Math.abs(bikePos.x) > ARENA_HALF_SIZE_X ||
-    Math.abs(bikePos.z) > ARENA_HALF_SIZE_Z
+    Math.abs(dx) > ARENA_HALF_SIZE_X ||
+    Math.abs(dz) > ARENA_HALF_SIZE_Z
   );
 }
 
@@ -1381,6 +1428,7 @@ function resetGame() {
   showReadyToStartMessage();   // back to "Press Q to start"
   removeTutorialBooster();
   engineStarted = false;
+  lapTimerArmed = false;
   audioMgr?.setWhoosh(false);
 
 }
@@ -1403,10 +1451,13 @@ function startGame() {
   gameState = GAME_STATE.PLAYING;
   timeScale = 1.0;
   hideOverlay();
-
+  lapTimerArmed = false;
   // Start timing the current lap from now
-  currentLapStartTime = clock.getElapsedTime();
+  currentLapStartTime = null;
   currentLapTime = 0;
+
+  currentLapFrames = [];
+  lastGhostSampleTime = 0;
 }
 
 
@@ -1838,6 +1889,7 @@ function animate() {
 
     if (gameState === GAME_STATE.PLAYING) {
       if (keys.nitro && nitro > 0) {
+        usingNitro = true;
         nitro = Math.max(0, nitro - NITRO_DRAIN_PER_SEC * rawDt);
         speedNow = forwardSpeed + NITRO_SPEED_BONUS;
       }
@@ -1846,11 +1898,12 @@ function animate() {
     }
 
     // play nitro whoosh on *start* of nitro (edge trigger)
-    if (usingNitro && !wasUsingNitro) audioMgr.playNitro();
+    if (usingNitro && !wasUsingNitro) audioMgr?.setWhoosh(true);
+    if (!usingNitro && wasUsingNitro) audioMgr?.setWhoosh(false);
     wasUsingNitro = usingNitro;
 
     audioMgr?.update({
-      holdingNitro: keys.nitro,
+      holdingNitro: usingNitro,
       nitroAmount: nitro,
       gameState: gameState,
       });
@@ -1887,7 +1940,7 @@ function animate() {
       gameState === GAME_STATE.PLAYING &&
       currentLapStartTime !== null
     ) {
-      const ghostT = clock.getElapsedTime() - currentLapStartTime;
+      const ghostT = (clock.getElapsedTime() - currentLapStartTime) * ghostTimeScale;
       const lastFrame = bestLapGhostFrames[bestLapGhostFrames.length - 1];
 
       if (ghostT > lastFrame.t) {
@@ -1988,5 +2041,7 @@ function animate() {
   }
   updateHUD(rawDt);
   updateMinimap();
+  const boostPulse = (keys.nitro && nitro > 0 && gameState === GAME_STATE.PLAYING) ? 0.7 : 0.0;
+  env?.update(t, rawDt, boostPulse);
   composer.render(scene, camera);
 }
