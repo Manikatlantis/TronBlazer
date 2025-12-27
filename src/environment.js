@@ -1,78 +1,382 @@
-// src/environment.js
+// environment.js
 import * as THREE from "three";
+import { getTrackBounds } from "./track_bounds.js";
+
+// +1 = RIGHT side of the track (relative to tangent direction)
+// -1 = LEFT side
+const CITY_SIDE = +1;
+
+// Safety buffer so NOTHING can appear where the bike rides
+// (in world units, added on top of track.halfWidth)
+const TRACK_CLEARANCE = 26;
 
 export function createEnvironment(scene, renderer) {
   const group = new THREE.Group();
   scene.add(group);
 
-  // --------- dynamic bounds (updated from main.js) ----------
-  let halfX = 300;
-  let halfZ = 300;
-  const maxHalf = () => Math.max(halfX, halfZ);
+  // ---------- Stars ----------
+  const stars = makeStarField(2600, 2200);
+  group.add(stars);
 
-  // ---------- SKY DOME ----------
-  const skyGeo = new THREE.SphereGeometry(2500, 32, 16);
-  const skyMat = new THREE.ShaderMaterial({
-    side: THREE.BackSide,
+  // ---------- Sky streaks + meteors ----------
+  const skyStreaks = createSkyStreaks(220);
+  group.add(skyStreaks.lines);
+
+  const meteorSystem = createMeteors();
+  group.add(meteorSystem.group);
+
+  // ---------- City ----------
+  let track = null;
+  let arena = { halfX: 80, halfZ: 80, cx: 0, cz: 0 };
+
+  // TRON materials
+  const tronMat = createTronBuildingMaterial();
+  const outlineMat = new THREE.MeshBasicMaterial({
+    color: 0x00f5ff,
+    transparent: true,
+    opacity: 0.22,
+    blending: THREE.AdditiveBlending,
     depthWrite: false,
-    uniforms: {
-      uTop: { value: new THREE.Color(0x050a14) },
-      uMid: { value: new THREE.Color(0x020308) },
-      uBot: { value: new THREE.Color(0x000000) },
-    },
-    vertexShader: `
-      varying vec3 vPos;
-      void main(){
-        vPos = position;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
-      }
-    `,
-    fragmentShader: `
-      varying vec3 vPos;
-      uniform vec3 uTop, uMid, uBot;
-      void main(){
-        float h = normalize(vPos).y * 0.5 + 0.5;
-        vec3 col = mix(uBot, uMid, smoothstep(0.0, 0.6, h));
-        col = mix(col, uTop, smoothstep(0.55, 1.0, h));
-        gl_FragColor = vec4(col, 1.0);
-      }
-    `,
+    side: THREE.BackSide,
   });
-  const sky = new THREE.Mesh(skyGeo, skyMat);
-  group.add(sky);
 
-  // ---------- CITY RING (INSTANCED) ----------
-  const CITY_COUNT  = 1800;
-  const CITY_HEIGHT_MIN = 25;
-  const CITY_HEIGHT_MAX = 180;
+  // Multiple shape batches (instanced)
+  const cityBatches = []; // [{ mesh, outline, count }]
+  let buildingMode = "TRON";
 
-  const bGeo = new THREE.BoxGeometry(1, 1, 1);
+  function setBounds(halfX, halfZ, cx = 0, cz = 0) {
+    arena.halfX = halfX;
+    arena.halfZ = halfZ;
+    arena.cx = cx;
+    arena.cz = cz;
 
-  const bMat = new THREE.ShaderMaterial({
-    transparent: false,
+    if (track) rebuildCityAlongTrack();
+    else rebuildCityCircleFallback();
+  }
+
+  function setTrack(pointsXZ, halfWidth) {
+    if (!pointsXZ || pointsXZ.length < 2) {
+      track = null;
+      rebuildCityCircleFallback();
+      return;
+    }
+
+    const B = getTrackBounds(pointsXZ, halfWidth, 0);
+    const center = new THREE.Vector2(B.cx, B.cz);
+
+    const pts2 = pointsXZ.map(([x, z]) => new THREE.Vector2(x, z));
+    const { segLens, totalLen } = computePolylineLengths(pts2);
+
+    track = { points: pointsXZ, halfWidth, pts2, center, segLens, totalLen };
+    rebuildCityAlongTrack();
+  }
+
+  // exists so main.js calls don't crash
+  function setBuildingMode(mode) {
+    buildingMode = mode || "TRON";
+  }
+
+  function clearCity() {
+    for (const b of cityBatches) {
+      group.remove(b.mesh);
+      group.remove(b.outline);
+    }
+    cityBatches.length = 0;
+  }
+
+  function addBatch(geo, count) {
+    const mesh = new THREE.InstancedMesh(geo, tronMat, count);
+    mesh.frustumCulled = false;
+
+    const outline = new THREE.InstancedMesh(geo, outlineMat, count);
+    outline.frustumCulled = false;
+
+    group.add(mesh);
+    group.add(outline);
+
+    cityBatches.push({ mesh, outline, count });
+    return cityBatches[cityBatches.length - 1];
+  }
+
+  function rebuildCityAlongTrack() {
+    if (!track) return rebuildCityCircleFallback();
+
+    clearCity();
+
+    // total density scales with track length
+    const total = Math.floor(THREE.MathUtils.clamp(track.totalLen * 0.85, 520, 1700));
+
+    // Split across shapes
+    const boxCount = Math.floor(total * 0.55);
+    const cylCount = Math.floor(total * 0.25);
+    const spireCount = total - boxCount - cylCount;
+
+    // Geometries
+    const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+    const cylGeo = new THREE.CylinderGeometry(0.65, 0.85, 1, 8, 1, false);
+    const spireGeo = new THREE.ConeGeometry(0.75, 1, 7, 1, false);
+
+    const batchBox = addBatch(boxGeo, boxCount);
+    const batchCyl = addBatch(cylGeo, cylCount);
+    const batchSpire = addBatch(spireGeo, spireCount);
+
+    const dummy = new THREE.Object3D();
+    const dummyO = new THREE.Object3D();
+
+    const clampToArena = (v2) => {
+      const margin = 12;
+      v2.x = THREE.MathUtils.clamp(v2.x, arena.cx - arena.halfX + margin, arena.cx + arena.halfX - margin);
+      v2.y = THREE.MathUtils.clamp(v2.y, arena.cz - arena.halfZ + margin, arena.cz + arena.halfZ - margin);
+      return v2;
+    };
+
+    const exclusion = track.halfWidth + TRACK_CLEARANCE;
+
+    placeAlongTrack(batchBox, boxCount, "box");
+    placeAlongTrack(batchCyl, cylCount, "cyl");
+    placeAlongTrack(batchSpire, spireCount, "spire");
+
+    function placeAlongTrack(batch, count, shape) {
+      const { mesh, outline } = batch;
+
+      for (let i = 0; i < count; i++) {
+        // Try several times to guarantee we land OUTSIDE the track exclusion zone
+        let placed = null;
+        let dir = null;
+
+        for (let tries = 0; tries < 14; tries++) {
+          const sample = samplePointAlongPolyline(track.pts2, track.segLens, track.totalLen);
+          const p = sample.p;
+          dir = sample.dir;
+
+          // Right normal (relative to tangent direction)
+          const rightNormal = new THREE.Vector2(dir.y, -dir.x).normalize().multiplyScalar(CITY_SIDE);
+
+          // Base distance outside the lane + depth variation
+          const baseOffset = track.halfWidth + TRACK_CLEARANCE + 10;
+
+          const layer = Math.random();
+          const randomExtra =
+            layer < 0.70 ? (8 + Math.random() * 26) :
+            layer < 0.93 ? (34 + Math.random() * 44) :
+                           (80 + Math.random() * 120);
+
+          const candidate = p.clone().add(rightNormal.multiplyScalar(baseOffset + randomExtra));
+
+          clampToArena(candidate);
+
+          // HARD rule: keep away from drivable corridor
+          const d = closestDistanceToPolyline2(candidate, track.pts2);
+          if (d >= exclusion) {
+            placed = candidate;
+            break;
+          }
+        }
+
+        // If somehow still not found, push far out on the right side
+        if (!placed) {
+          const sample = samplePointAlongPolyline(track.pts2, track.segLens, track.totalLen);
+          dir = sample.dir;
+          const p = sample.p;
+
+          const rightNormal = new THREE.Vector2(dir.y, -dir.x).normalize().multiplyScalar(CITY_SIDE);
+          placed = p.clone().add(rightNormal.multiplyScalar(track.halfWidth + TRACK_CLEARANCE + 160));
+          clampToArena(placed);
+        }
+
+        // Taller + more varied proportions
+        const mega = Math.random() < 0.10;
+        const giga = Math.random() < 0.03;
+
+        let w, d, h;
+        if (giga) {
+          w = 8 + Math.random() * 20;
+          d = 8 + Math.random() * 20;
+          h = 180 + Math.random() * 340;
+        } else if (mega) {
+          w = 4 + Math.random() * 14;
+          d = 4 + Math.random() * 14;
+          h = 90 + Math.random() * 220;
+        } else {
+          w = 1.6 + Math.pow(Math.random(), 0.7) * 10;
+          d = 1.6 + Math.pow(Math.random(), 0.7) * 10;
+          h = 35 + Math.pow(Math.random(), 0.55) * 180;
+        }
+
+        // Shape-specific tweaks
+        if (shape === "cyl") {
+          w *= 0.75;
+          d *= 0.75;
+          h *= 1.15;
+        } else if (shape === "spire") {
+          w *= 0.65;
+          d *= 0.65;
+          h *= 1.35;
+        }
+
+        dummy.position.set(placed.x, h * 0.5, placed.y);
+
+        // Align with track, add slight tilt
+        const yaw = Math.atan2(dir.x, dir.y);
+        const yawJitter = (Math.random() * 0.70 - 0.35);
+        const tiltX = (Math.random() * 0.06 - 0.03);
+        const tiltZ = (Math.random() * 0.06 - 0.03);
+
+        dummy.rotation.set(tiltX, yaw + yawJitter, tiltZ);
+        dummy.scale.set(w, h, d);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(i, dummy.matrix);
+
+        dummyO.position.copy(dummy.position);
+        dummyO.rotation.copy(dummy.rotation);
+        dummyO.scale.set(w * 1.07, h * 1.03, d * 1.07);
+        dummyO.updateMatrix();
+        outline.setMatrixAt(i, dummyO.matrix);
+      }
+
+      mesh.instanceMatrix.needsUpdate = true;
+      outline.instanceMatrix.needsUpdate = true;
+    }
+  }
+
+  function rebuildCityCircleFallback() {
+    clearCity();
+
+    const count = 520;
+
+    const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+    const cylGeo = new THREE.CylinderGeometry(0.65, 0.85, 1, 8, 1, false);
+    const spireGeo = new THREE.ConeGeometry(0.75, 1, 7, 1, false);
+
+    const a = addBatch(boxGeo, Math.floor(count * 0.55));
+    const b = addBatch(cylGeo, Math.floor(count * 0.25));
+    const c = addBatch(spireGeo, count - Math.floor(count * 0.55) - Math.floor(count * 0.25));
+
+    const batches = [a, b, c];
+    const radius = Math.min(arena.halfX, arena.halfZ) * 0.92;
+
+    const dummy = new THREE.Object3D();
+    const dummyO = new THREE.Object3D();
+
+    for (let bi = 0; bi < batches.length; bi++) {
+      const { mesh, outline, count: n } = batches[bi];
+
+      for (let i = 0; i < n; i++) {
+        const ang = Math.random() * Math.PI * 2;
+        const r = radius + (Math.random() * 18 - 9);
+
+        const x = arena.cx + Math.cos(ang) * r;
+        const z = arena.cz + Math.sin(ang) * r;
+
+        const mega = Math.random() < 0.12;
+        const w = mega ? (4 + Math.random() * 14) : (1.8 + Math.random() * 8);
+        const d = mega ? (4 + Math.random() * 14) : (1.8 + Math.random() * 8);
+        const h = mega ? (90 + Math.random() * 220) : (35 + Math.random() * 160);
+
+        dummy.position.set(x, h * 0.5, z);
+        dummy.rotation.set((Math.random()*0.06-0.03), ang + (Math.random()*0.6-0.3), (Math.random()*0.06-0.03));
+        dummy.scale.set(w, h, d);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(i, dummy.matrix);
+
+        dummyO.position.copy(dummy.position);
+        dummyO.rotation.copy(dummy.rotation);
+        dummyO.scale.set(w * 1.07, h * 1.03, d * 1.07);
+        dummyO.updateMatrix();
+        outline.setMatrixAt(i, dummyO.matrix);
+      }
+
+      mesh.instanceMatrix.needsUpdate = true;
+      outline.instanceMatrix.needsUpdate = true;
+    }
+  }
+
+  function update(time, dt, boostPulse = 0.0) {
+    if (stars) stars.rotation.y += dt * 0.01;
+
+    // shader uniforms
+    if (tronMat?.uniforms) {
+      tronMat.uniforms.uTime.value = time;
+      tronMat.uniforms.uBoost.value = boostPulse || 0;
+    }
+
+    // outline pulse + cyan/magenta + a touch of red
+    const pulse = 0.18 + (boostPulse || 0) * 0.35 + 0.06 * Math.sin(time * 2.3);
+    outlineMat.opacity = THREE.MathUtils.lerp(outlineMat.opacity, pulse, 0.12);
+
+    const t = 0.5 + 0.5 * Math.sin(time * 0.7);
+    const u = 0.5 + 0.5 * Math.sin(time * 1.1 + 1.4);
+
+    const cCyan = new THREE.Color(0x00f5ff);
+    const cMag  = new THREE.Color(0xec10ae);
+    const cRed  = new THREE.Color(0xff2a2a);
+
+    // mostly cyan/magenta, occasional red bias
+    outlineMat.color.copy(cCyan).lerp(cMag, t * 0.55).lerp(cRed, u * 0.18);
+
+    // sky streaks + meteors
+    skyStreaks.update(time, dt, boostPulse);
+    meteorSystem.update(time, dt, boostPulse);
+  }
+
+  return {
+    group,
+    setBounds,
+    setTrack,
+    setBuildingMode,
+    update,
+  };
+}
+
+// ---------------- TRON MATERIAL (Instanced-safe) ----------------
+
+function createTronBuildingMaterial() {
+  return new THREE.ShaderMaterial({
     uniforms: {
       uTime: { value: 0 },
-      uBase: { value: new THREE.Color(0x020308) },
-      uNeon: { value: new THREE.Color(0x00f5ff) },
-      uNeon2:{ value: new THREE.Color(0xec10ae) },
-      uPulse:{ value: 0.0 },
+      uBoost: { value: 0 },
+
+      // TRON palette (+red)
+      uBase:   { value: new THREE.Color(0x02040a) },
+      uCyan:   { value: new THREE.Color(0x00f5ff) },
+      uBlue:   { value: new THREE.Color(0x2b6bff) },
+      uMag:    { value: new THREE.Color(0xec10ae) },
+      uViolet: { value: new THREE.Color(0x6a00ff) },
+      uRed:    { value: new THREE.Color(0xff2a2a) },
     },
     vertexShader: `
-      varying vec3 vWorld;
-      varying vec3 vLocal;
-      void main(){
-        vLocal = position;
-        vec4 w = modelMatrix * instanceMatrix * vec4(position,1.0);
-        vWorld = w.xyz;
-        gl_Position = projectionMatrix * viewMatrix * w;
+      varying vec3 vWorldPos;
+      varying vec3 vNormalW;
+
+      void main() {
+        vec3 pos = position;
+        vec3 nrm = normal;
+
+        #ifdef USE_INSTANCING
+          pos = (instanceMatrix * vec4(pos, 1.0)).xyz;
+          nrm = mat3(instanceMatrix) * nrm;
+        #endif
+
+        vec4 wp = modelMatrix * vec4(pos, 1.0);
+        vWorldPos = wp.xyz;
+        vNormalW = normalize(mat3(modelMatrix) * nrm);
+
+        gl_Position = projectionMatrix * viewMatrix * wp;
       }
     `,
     fragmentShader: `
-      varying vec3 vWorld;
-      varying vec3 vLocal;
       uniform float uTime;
-      uniform float uPulse;
-      uniform vec3 uBase, uNeon, uNeon2;
+      uniform float uBoost;
+
+      uniform vec3 uBase;
+      uniform vec3 uCyan;
+      uniform vec3 uBlue;
+      uniform vec3 uMag;
+      uniform vec3 uViolet;
+      uniform vec3 uRed;
+
+      varying vec3 vWorldPos;
+      varying vec3 vNormalW;
 
       float hash(vec2 p){
         p = fract(p * vec2(123.34, 345.45));
@@ -80,288 +384,349 @@ export function createEnvironment(scene, renderer) {
         return fract(p.x * p.y);
       }
 
-      void main(){
+      void main() {
+        vec3 N = normalize(vNormalW);
+        vec3 V = normalize(cameraPosition - vWorldPos);
+
+        // strong rim glow
+        float fresnel = pow(1.0 - max(dot(V, N), 0.0), 2.5);
+
+        // height neon gradient
+        float h = clamp(vWorldPos.y / 240.0, 0.0, 1.0);
+        vec3 neon1 = mix(uCyan, uBlue, smoothstep(0.0, 0.35, h));
+        vec3 neon2 = mix(uViolet, uMag, smoothstep(0.35, 1.0, h));
+        vec3 neon = mix(neon1, neon2, smoothstep(0.25, 1.0, h));
+
+        // occasional red accent by height + time
+        float redMask = smoothstep(0.55, 1.0, h) * (0.5 + 0.5 * sin(uTime * 0.9 + vWorldPos.x * 0.01));
+        neon = mix(neon, mix(neon, uRed, 0.55), redMask * 0.22);
+
+        // windows
+        vec2 g = vWorldPos.xz * 0.42;
+        float cell = hash(floor(g));
+        float windows = step(0.74, cell);
+        windows *= 0.75 + 0.25 * sin(uTime * 9.0 + vWorldPos.x * 0.15 + vWorldPos.z * 0.15);
+
+        // scanlines
+        float scan = 0.5 + 0.5 * sin(vWorldPos.y * 0.65 - uTime * (7.5 + uBoost * 12.0));
+        scan = smoothstep(0.40, 0.92, scan);
+
+        // circuit strips
+        float fx = abs(fract(vWorldPos.x * 0.10) - 0.5);
+        float fz = abs(fract(vWorldPos.z * 0.10) - 0.5);
+        float linesX = smoothstep(0.47, 0.50, fx);
+        float linesZ = smoothstep(0.47, 0.50, fz);
+        float circuits = (1.0 - linesX) * 0.35 + (1.0 - linesZ) * 0.35;
+
+        // trippy hue wobble
+        float wobble = 0.5 + 0.5 * sin(uTime * 1.2 + vWorldPos.x * 0.02 + vWorldPos.z * 0.02);
+        vec3 wobNeon = mix(neon, mix(uCyan, uMag, wobble), 0.28);
+
+        float flicker = 0.86 + 0.14 * sin(uTime * 13.0 + vWorldPos.x * 0.08 + vWorldPos.z * 0.08);
+
         vec3 col = uBase;
 
-        vec2 g = vec2(vWorld.x, vWorld.z) * 0.18 + vec2(vWorld.y * 0.08);
-        vec2 cell = floor(g);
-        float h = hash(cell);
+        col += wobNeon * (
+          fresnel * 2.4 +
+          scan * 0.36 +
+          circuits * 0.48 +
+          windows * 0.70
+        ) * flicker;
 
-        float win = step(0.62, h);
+        col *= (1.0 + uBoost * 0.55);
 
-        float scan = 0.5 + 0.5 * sin(uTime * 1.8 + vWorld.y * 0.08 + h * 6.2831);
-        scan = smoothstep(0.35, 0.95, scan);
-
-        vec3 neon = mix(uNeon, uNeon2, step(0.5, hash(cell + 19.2)));
-
-        float b = win * (0.25 + 0.75 * scan);
-        b += uPulse * win * 0.8;
-
-        col += neon * b;
         gl_FragColor = vec4(col, 1.0);
       }
     `,
+    transparent: false,
+    depthWrite: true,
+  });
+}
+
+// ---------------- Stars ----------------
+
+function makeStarField(count = 2000, spread = 1200) {
+  const geo = new THREE.BufferGeometry();
+  const pos = new Float32Array(count * 3);
+
+  for (let i = 0; i < count; i++) {
+    const idx = i * 3;
+    pos[idx + 0] = (Math.random() * 2 - 1) * spread;
+    pos[idx + 1] = Math.random() * spread * 1.1 + 80;
+    pos[idx + 2] = (Math.random() * 2 - 1) * spread;
+  }
+
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+
+  const mat = new THREE.PointsMaterial({
+    color: 0x88ccff,
+    size: 1.15,
+    sizeAttenuation: true,
+    transparent: true,
+    opacity: 0.55,
+    depthWrite: false,
   });
 
-  const buildings = new THREE.InstancedMesh(bGeo, bMat, CITY_COUNT);
-  buildings.frustumCulled = false;
-  group.add(buildings);
+  return new THREE.Points(geo, mat);
+}
 
-  // Cache per-building randoms so resizing doesn't "shuffle" the city
-  const citySeed = Array.from({ length: CITY_COUNT }, (_, i) => {
-    const angle = (i / CITY_COUNT) * Math.PI * 2;
-    return {
-      angle,
-      radialJitter: Math.random() * 90,
-      h: THREE.MathUtils.lerp(CITY_HEIGHT_MIN, CITY_HEIGHT_MAX, Math.random() ** 2),
-      w: THREE.MathUtils.lerp(6, 22, Math.random()),
-      d: THREE.MathUtils.lerp(6, 22, Math.random()),
-    };
-  });
+// ---------------- Sky streaks ----------------
 
-  const dummy = new THREE.Object3D();
+function createSkyStreaks(count = 180) {
+  const positions = new Float32Array(count * 2 * 3);
+  const dirs = [];
+  const speeds = [];
+  const lengths = [];
 
-  function rebuildCityRing() {
-    // Put city OUTSIDE the arena so it frames it, not sits inside it
-    const CITY_RADIUS = maxHalf() * 1.35 + 60;
+  const baseYMin = 120;
+  const baseYMax = 520;
 
-    for (let i = 0; i < CITY_COUNT; i++) {
-      const s = citySeed[i];
-      const radius = CITY_RADIUS + s.radialJitter;
+  for (let i = 0; i < count; i++) {
+    const x = (Math.random() * 2 - 1) * 2200;
+    const y = baseYMin + Math.random() * (baseYMax - baseYMin);
+    const z = (Math.random() * 2 - 1) * 2200;
 
-      const x = Math.cos(s.angle) * radius;
-      const z = Math.sin(s.angle) * radius;
+    const dir = new THREE.Vector3(
+      (Math.random() * 2 - 1) * 0.8,
+      -(0.4 + Math.random() * 0.7),
+      (Math.random() * 2 - 1) * 0.8
+    ).normalize();
 
-      dummy.position.set(x, s.h * 0.5 - 2, z);
-      dummy.rotation.y = s.angle + Math.PI * 0.5;
-      dummy.scale.set(s.w, s.h, s.d);
-      dummy.updateMatrix();
+    const len = 30 + Math.random() * 140;
+    const spd = 60 + Math.random() * 200;
 
-      buildings.setMatrixAt(i, dummy.matrix);
-    }
-    buildings.instanceMatrix.needsUpdate = true;
+    dirs.push(dir);
+    speeds.push(spd);
+    lengths.push(len);
+
+    const x2 = x - dir.x * len;
+    const y2 = y - dir.y * len;
+    const z2 = z - dir.z * len;
+
+    const o = i * 6;
+    positions[o + 0] = x;  positions[o + 1] = y;  positions[o + 2] = z;
+    positions[o + 3] = x2; positions[o + 4] = y2; positions[o + 5] = z2;
   }
 
-  // ---------- HOLOGRAM BILLBOARDS ----------
-  const holoGroup = new THREE.Group();
-  group.add(holoGroup);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
 
-  function makeHoloSign(text, color = "#00f5ff") {
-    const c = document.createElement("canvas");
-    c.width = 1024;
-    c.height = 512;
-    const ctx = c.getContext("2d");
-
-    function draw(t = 0) {
-      ctx.clearRect(0, 0, c.width, c.height);
-
-      ctx.fillStyle = "rgba(0,0,0,0)";
-      ctx.fillRect(0, 0, c.width, c.height);
-
-      ctx.fillStyle = "rgba(255,255,255,0.04)";
-      for (let y = 0; y < c.height; y += 6) ctx.fillRect(0, y, c.width, 2);
-
-      const jx = Math.sin(t * 8.0) * 3.0;
-
-      ctx.font = '900 150px system-ui, sans-serif';
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-
-      ctx.shadowColor = color;
-      ctx.shadowBlur = 60;
-
-      ctx.fillStyle = color;
-      ctx.fillText(text, c.width / 2 + jx, c.height / 2);
-
-      ctx.font = '700 44px system-ui, sans-serif';
-      ctx.shadowBlur = 25;
-      ctx.fillStyle = "rgba(236,16,174,0.85)";
-      ctx.fillText("NEON GRID CIRCUIT", c.width / 2, c.height * 0.82);
-    }
-
-    const tex = new THREE.CanvasTexture(c);
-    tex.colorSpace = THREE.SRGBColorSpace;
-
-    const mat = new THREE.MeshBasicMaterial({
-      map: tex,
-      transparent: true,
-      opacity: 0.95,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    });
-
-    const geo = new THREE.PlaneGeometry(70, 35);
-    const mesh = new THREE.Mesh(geo, mat);
-
-    return { mesh, update: (t) => { draw(t); tex.needsUpdate = true; } };
-  }
-
-  const signs = [];
-  const s1 = makeHoloSign("TRON CIRCUIT", "#00f5ff");
-  holoGroup.add(s1.mesh);
-  signs.push(s1);
-
-  const s2 = makeHoloSign("LIGHTCYCLE", "#ec10ae");
-  holoGroup.add(s2.mesh);
-  signs.push(s2);
-
-  function repositionSigns() {
-    // Place near outer edges of the arena, so they "frame" the action
-    const pad = 110;
-    s1.mesh.position.set(0, 40, -(halfZ + pad));
-    s1.mesh.rotation.y = 0;
-
-    s2.mesh.position.set(halfX + pad, 32, 0);
-    s2.mesh.rotation.y = -Math.PI * 0.5;
-  }
-
-  // ---------- SCANLINE SWEEP RING ----------
-  const sweepGeo = new THREE.RingGeometry(1, 1.22, 128);
-  const sweepMat = new THREE.MeshBasicMaterial({
+  const mat = new THREE.LineBasicMaterial({
     color: 0x00f5ff,
     transparent: true,
-    opacity: 0.0,
-    depthWrite: false,
+    opacity: 0.12,
     blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide,
+    depthWrite: false,
   });
-  const sweep = new THREE.Mesh(sweepGeo, sweepMat);
-  sweep.rotation.x = -Math.PI * 0.5;
-  sweep.position.y = 0.15;
-  group.add(sweep);
 
-  let sweepT = 0;
-  let sweepActive = false;
+  const lines = new THREE.LineSegments(geo, mat);
+  lines.frustumCulled = false;
 
-  function triggerSweep() {
-    sweepT = 0;
-    sweepActive = true;
-    sweepMat.opacity = 1.0;
-  }
+  function update(time, dt, boostPulse) {
+    const base = 0.10 + 0.05 * Math.sin(time * 0.7);
+    mat.opacity = THREE.MathUtils.lerp(mat.opacity, base + (boostPulse || 0) * 0.10, 0.08);
 
-  // ---------- LIGHT SHAFTS (FAKE VOLUMETRIC) ----------
-  const shaftGroup = new THREE.Group();
-  group.add(shaftGroup);
+    // cyan/magenta with tiny red hint
+    const mix1 = 0.5 + 0.5 * Math.sin(time * 0.6);
+    const mix2 = 0.5 + 0.5 * Math.sin(time * 0.9 + 1.2);
+    const cA = new THREE.Color(0x00f5ff);
+    const cB = new THREE.Color(0xec10ae);
+    const cR = new THREE.Color(0xff2a2a);
+    mat.color.copy(cA).lerp(cB, mix1 * 0.35).lerp(cR, mix2 * 0.10);
 
-  function makeShaft() {
-    const geo = new THREE.CylinderGeometry(0.6, 6.0, 90, 18, 1, true);
-    const mat = new THREE.ShaderMaterial({
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      side: THREE.DoubleSide,
-      uniforms: { uTime: { value: 0 } },
-      vertexShader: `
-        varying vec2 vUv;
-        void main(){
-          vUv = uv;
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
-        }
-      `,
-      fragmentShader: `
-        varying vec2 vUv;
-        uniform float uTime;
-        float n(float x){ return fract(sin(x)*43758.5453123); }
-        void main(){
-          float v = smoothstep(0.0, 0.15, vUv.y) * (1.0 - smoothstep(0.75, 1.0, vUv.y));
-          float bands = 0.5 + 0.5*sin((vUv.y*18.0) - uTime*2.2 + n(vUv.x*10.0)*6.28);
-          bands = smoothstep(0.35, 0.9, bands);
-          float a = v * bands * 0.45;
-          gl_FragColor = vec4(0.0, 0.96, 1.0, a);
-        }
-      `,
-    });
-    const m = new THREE.Mesh(geo, mat);
-    return { mesh: m, mat };
-  }
+    const arr = geo.attributes.position.array;
 
-  const shafts = [];
-  const SHAFT_COUNT = 28;
+    for (let i = 0; i < count; i++) {
+      const dir = dirs[i];
+      const spd = speeds[i];
+      const len = lengths[i];
 
-  for (let i = 0; i < SHAFT_COUNT; i++) {
-    const s = makeShaft();
-    shafts.push(s);
-    shaftGroup.add(s.mesh);
-  }
+      const o = i * 6;
 
-  function scatterShaftsAcrossArena() {
-    // Scatter THROUGH the arena instead of a circle in the middle
-    // (keep a margin so they don't sit inside walls)
-    const margin = 25;
-    for (let i = 0; i < shafts.length; i++) {
-      const s = shafts[i];
+      arr[o + 0] += dir.x * spd * dt;
+      arr[o + 1] += dir.y * spd * dt;
+      arr[o + 2] += dir.z * spd * dt;
 
-      const x = THREE.MathUtils.randFloat(-halfX + margin, halfX - margin);
-      const z = THREE.MathUtils.randFloat(-halfZ + margin, halfZ - margin);
+      arr[o + 3] = arr[o + 0] - dir.x * len;
+      arr[o + 4] = arr[o + 1] - dir.y * len;
+      arr[o + 5] = arr[o + 2] - dir.z * len;
 
-      s.mesh.position.set(x, 45, z);
-
-      // random slight scale so it feels organic
-      const sc = THREE.MathUtils.randFloat(0.9, 1.35);
-      s.mesh.scale.set(sc, 1.0, sc);
-
-      s.mesh.rotation.y = Math.random() * Math.PI * 2;
-    }
-  }
-
-  // ---------- BOUNDS API (called from main.js) ----------
-  function setBounds(newHalfX, newHalfZ) {
-    halfX = Math.max(50, newHalfX || halfX);
-    halfZ = Math.max(50, newHalfZ || halfZ);
-
-    rebuildCityRing();
-    repositionSigns();
-    scatterShaftsAcrossArena();
-  }
-
-  // build once with defaults (until arena loads and calls setBounds)
-  rebuildCityRing();
-  repositionSigns();
-  scatterShaftsAcrossArena();
-
-  // ---------- UPDATE HOOK ----------
-  function update(t, dt, intensity = 0) {
-    bMat.uniforms.uTime.value = t;
-    bMat.uniforms.uPulse.value = intensity;
-
-    for (const s of signs) s.update(t);
-
-    // sweep event auto triggers
-    if (!sweepActive && (Math.floor(t) % 18 === 0) && (Math.random() < 0.02)) {
-      triggerSweep();
-    }
-
-    if (sweepActive) {
-      sweepT += dt;
-
-      // scale sweep to cover the FULL arena footprint
-      const Rmax = maxHalf() * 1.55 + 80;
-      const Rmin = maxHalf() * 0.12;
-
-      const k = THREE.MathUtils.smoothstep(sweepT, 0, 2.2);
-      const R = THREE.MathUtils.lerp(Rmin, Rmax, k);
-
-      sweep.scale.setScalar(R);
-      sweepMat.opacity = Math.max(0, 1.0 - sweepT / 2.2);
-
-      bMat.uniforms.uPulse.value = Math.max(
-        bMat.uniforms.uPulse.value,
-        sweepMat.opacity * 0.75
-      );
-
-      if (sweepT >= 2.2) {
-        sweepActive = false;
-        sweepMat.opacity = 0.0;
+      if (arr[o + 1] < 80 || Math.abs(arr[o + 0]) > 2600 || Math.abs(arr[o + 2]) > 2600) {
+        arr[o + 0] = (Math.random() * 2 - 1) * 2200;
+        arr[o + 1] = 140 + Math.random() * 520;
+        arr[o + 2] = (Math.random() * 2 - 1) * 2200;
       }
     }
 
-    for (const s of shafts) s.mat.uniforms.uTime.value = t;
+    geo.attributes.position.needsUpdate = true;
   }
 
-  return {
-    group,
-    update,
-    triggerSweep,
-    setBounds, // ✅ IMPORTANT: call this after arena loads
-  };
+  return { lines, update };
+}
+
+// ---------------- Meteors ----------------
+
+function createMeteors() {
+  const group = new THREE.Group();
+
+  const meteors = [];
+  const meteorGeo = new THREE.SphereGeometry(1.3, 10, 10);
+
+  function spawnMeteor() {
+    const head = new THREE.Mesh(
+      meteorGeo,
+      new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.75,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+    );
+    head.frustumCulled = false;
+
+    const trailGeo = new THREE.BufferGeometry();
+    const trailPos = new Float32Array(2 * 3);
+    trailGeo.setAttribute("position", new THREE.BufferAttribute(trailPos, 3));
+
+    // trail tint rotates between cyan/magenta with slight red chance
+    const trailMat = new THREE.LineBasicMaterial({
+      color: 0x00f5ff,
+      transparent: true,
+      opacity: 0.35,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+
+    const trail = new THREE.Line(trailGeo, trailMat);
+    trail.frustumCulled = false;
+
+    const start = new THREE.Vector3(
+      (Math.random() * 2 - 1) * 1800,
+      520 + Math.random() * 380,
+      (Math.random() * 2 - 1) * 1800
+    );
+
+    const dir = new THREE.Vector3(
+      (Math.random() < 0.5 ? -1 : 1) * (0.8 + Math.random() * 1.3),
+      -(1.2 + Math.random() * 1.2),
+      (Math.random() < 0.5 ? -1 : 1) * (0.8 + Math.random() * 1.3)
+    ).normalize();
+
+    const speed = 680 + Math.random() * 900;
+    const life = 1.2 + Math.random() * 1.8;
+    const trailLen = 90 + Math.random() * 180;
+
+    // occasional red meteor
+    if (Math.random() < 0.18) {
+      trailMat.color.setHex(0xff2a2a);
+    } else if (Math.random() < 0.45) {
+      trailMat.color.setHex(0xec10ae);
+    }
+
+    head.position.copy(start);
+    group.add(head);
+    group.add(trail);
+
+    meteors.push({ head, trail, dir, speed, life, trailLen });
+  }
+
+  function update(time, dt, boostPulse) {
+    const rate = 0.10 + (boostPulse || 0) * 0.10;
+    if (Math.random() < dt * rate) spawnMeteor();
+
+    for (let i = meteors.length - 1; i >= 0; i--) {
+      const m = meteors[i];
+      m.life -= dt;
+
+      m.head.position.addScaledVector(m.dir, m.speed * dt);
+
+      const p = m.trail.geometry.attributes.position.array;
+      p[0] = m.head.position.x;
+      p[1] = m.head.position.y;
+      p[2] = m.head.position.z;
+
+      p[3] = m.head.position.x - m.dir.x * m.trailLen;
+      p[4] = m.head.position.y - m.dir.y * m.trailLen;
+      p[5] = m.head.position.z - m.dir.z * m.trailLen;
+
+      m.trail.geometry.attributes.position.needsUpdate = true;
+
+      const fade = THREE.MathUtils.clamp(m.life / 0.6, 0, 1);
+      m.head.material.opacity = 0.75 * fade;
+      m.trail.material.opacity = 0.35 * fade;
+
+      if (m.life <= 0 || m.head.position.y < 60) {
+        group.remove(m.head);
+        group.remove(m.trail);
+        m.head.geometry.dispose();
+        m.head.material.dispose();
+        m.trail.geometry.dispose();
+        m.trail.material.dispose();
+        meteors.splice(i, 1);
+      }
+    }
+  }
+
+  return { group, update };
+}
+
+// ---------------- Polyline helpers ----------------
+
+function computePolylineLengths(points2) {
+  const segLens = [];
+  let totalLen = 0;
+
+  for (let i = 0; i < points2.length - 1; i++) {
+    const a = points2[i];
+    const b = points2[i + 1];
+    const d = b.clone().sub(a).length();
+    segLens.push(d);
+    totalLen += d;
+  }
+  return { segLens, totalLen: Math.max(totalLen, 1e-6) };
+}
+
+function samplePointAlongPolyline(points2, segLens, totalLen) {
+  let r = Math.random() * totalLen;
+
+  let i = 0;
+  while (i < segLens.length && r > segLens[i]) {
+    r -= segLens[i];
+    i++;
+  }
+  i = Math.min(i, segLens.length - 1);
+
+  const a = points2[i];
+  const b = points2[i + 1];
+
+  const t = segLens[i] > 0 ? r / segLens[i] : 0.0;
+
+  const p = a.clone().lerp(b, t);
+  const dir = b.clone().sub(a).normalize();
+
+  return { p, dir };
+}
+
+// Closest distance from point (Vector2) to the polyline (Vector2[])
+// returns distance in world units
+function closestDistanceToPolyline2(p, pts) {
+  let best = Infinity;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    const d = pointSegmentDistance2(p, a, b);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+function pointSegmentDistance2(p, a, b) {
+  const ab = b.clone().sub(a);
+  const ap = p.clone().sub(a);
+  const abLen2 = ab.lengthSq();
+  let t = abLen2 > 0 ? ap.dot(ab) / abLen2 : 0;
+  t = THREE.MathUtils.clamp(t, 0, 1);
+  const proj = a.clone().add(ab.multiplyScalar(t));
+  return proj.distanceTo(p);
 }

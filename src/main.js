@@ -77,6 +77,7 @@ let minimapGateCache = null;  // cached gate line endpoints in minimap space
 const currentTrack = tracks.arena1;
 const BOUNCE_STRENGTH   = 0.3;// how strongly it pushes/reflects
 const TRACK_HALF_WIDTH = currentTrack.halfWidth;
+env?.setTrack(currentTrack.points, currentTrack.halfWidth);
 
 const CAMERA_MODE = {
   CHASE: "CHASE",
@@ -548,7 +549,8 @@ function init() {
   // Scene
   scene = new THREE.Scene();
   env = createEnvironment(scene, renderer);
-  env?.setBounds(ARENA_HALF_SIZE_X, ARENA_HALF_SIZE_Z);
+  env?.setTrack(currentTrack.points, currentTrack.halfWidth);
+  env?.setBounds(ARENA_HALF_SIZE_X, ARENA_HALF_SIZE_Z, ARENA_CENTER_X, ARENA_CENTER_Z);
   scene.background = new THREE.Color(0x020308);
   scene.fog = null;
 
@@ -749,7 +751,8 @@ function loadArena() {
 
       console.log("Arena bounds:", ARENA_HALF_SIZE_X, ARENA_HALF_SIZE_Z);
       // ✅ Spread environment across the arena 
-      env?.setBounds(ARENA_HALF_SIZE_X, ARENA_HALF_SIZE_Z);
+      env?.setBounds(ARENA_HALF_SIZE_X, ARENA_HALF_SIZE_Z, ARENA_CENTER_X, ARENA_CENTER_Z);
+      env?.setBuildingMode("inner"); // "outer" or "mid"
       // teal rim lights at the four corners
       addArenaRimLightsAtCorners();
     },
