@@ -558,3 +558,22 @@ html, body, #app, canvas, * {
   user-select: none;
   touch-action: none;
 }
+#damageFlash{
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: rgba(255, 0, 0, 0.35); /* translucent red */
+  z-index: 9998; /* keep under loading if you want, or above if needed */
+}
+
+#damageFlash.on{
+  animation: damageFlash 120ms ease-out;
+}
+
+@keyframes damageFlash{
+  0%   { opacity: 0; }
+  20%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+

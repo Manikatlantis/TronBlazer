@@ -25,12 +25,18 @@
     </div>
     <span id="hudNitroText" class="hud-value">0%</span>
   </div>
-
+  <div class="hud-row">
+    <span class="hud-label">HP</span>
+    <div class="hud-bar">
+      <div id="hpInner" class="hud-bar-fill"></div>
+    </div>
+    <span id="hpText" class="hud-value">100</span>
+  </div>
   <div class="hud-row">
     <span class="hud-label">Lap</span>
     <span id="hudLap" class="hud-value">0</span>
   </div>
-
+  
   <div class="hud-row">
     <span class="hud-label">Speed</span>
     <span id="hudSpeed" class="hud-value">0</span>
@@ -64,6 +70,7 @@
   <button id="btnRight" class="tbtn">▶</button>
   <button id="btnNitro" class="tbtn nitro">BOOST</button>
 </div>
+<div id="damageFlash"></div>
 
     <!-- Crash overlay -->
   <div id="crashMessage">

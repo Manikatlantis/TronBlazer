@@ -15,7 +15,7 @@ export function createAudioManager(camera) {
   whoosh.setLoop(true);
   whoosh.setVolume(0.85);
 
-  // --- NEW: pickup SFX (small pool so it always plays, even if triggered quickly)
+  // --- pickup pool ---
   const PICKUP_POOL_SIZE = 4;
   const pickupPool = Array.from({ length: PICKUP_POOL_SIZE }, () => {
     const a = new THREE.Audio(listener);
@@ -25,7 +25,18 @@ export function createAudioManager(camera) {
   });
   let pickupIdx = 0;
   let pickupLoaded = false;
-  // ------------------------------------------------------
+
+  // --- NEW: damage pool ---
+  const DAMAGE_POOL_SIZE = 3;
+  const damagePool = Array.from({ length: DAMAGE_POOL_SIZE }, () => {
+    const a = new THREE.Audio(listener);
+    a.setLoop(false);
+    a.setVolume(0.95);
+    return a;
+  });
+  let damageIdx = 0;
+  let damageLoaded = false;
+  // -----------------------
 
   let bgmLoaded = false;
   let whooshLoaded = false;
@@ -51,10 +62,15 @@ export function createAudioManager(camera) {
       if (wantWhoosh && !whoosh.isPlaying) whoosh.play();
     });
 
-    // NEW
     loader.load("./public/audio/orb_pickup.mp3", (buffer) => {
-      pickupPool.forEach(a => a.setBuffer(buffer));
+      pickupPool.forEach((a) => a.setBuffer(buffer));
       pickupLoaded = true;
+    });
+
+    // NEW
+    loader.load("./public/audio/damage.mp3", (buffer) => {
+      damagePool.forEach((a) => a.setBuffer(buffer));
+      damageLoaded = true;
     });
   }
 
@@ -82,7 +98,6 @@ export function createAudioManager(camera) {
     }
   }
 
-  // NEW
   function playPickup() {
     resumeContextIfNeeded();
     if (!pickupLoaded) return;
@@ -90,7 +105,18 @@ export function createAudioManager(camera) {
     const a = pickupPool[pickupIdx];
     pickupIdx = (pickupIdx + 1) % pickupPool.length;
 
-    // if this instance is currently playing, restart it
+    if (a.isPlaying) a.stop();
+    a.play();
+  }
+
+  // NEW
+  function playDamage() {
+    resumeContextIfNeeded();
+    if (!damageLoaded) return;
+
+    const a = damagePool[damageIdx];
+    damageIdx = (damageIdx + 1) % damagePool.length;
+
     if (a.isPlaying) a.stop();
     a.play();
   }
@@ -112,7 +138,8 @@ export function createAudioManager(camera) {
     startBgm,
     stopBgm,
     setWhoosh,
-    playPickup, // ✅ expose it
+    playPickup,
+    playDamage, // ✅ expose it
     update,
     stopAll,
     resumeContextIfNeeded,

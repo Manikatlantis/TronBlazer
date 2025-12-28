@@ -90,7 +90,7 @@ const trackPoints = currentTrack.points.map(
 );
 
 let trailMaterial, trailMesh;  // For the tron trail
-const MAX_TRAIL_POINTS = 100;
+const MAX_TRAIL_POINTS = 50;
 const trailPositions = [];
 
 const GAME_STATE = {
@@ -183,6 +183,16 @@ let lastLapCrossTime = 0;
 const LAP_COOLDOWN = 0.8; // seconds
 const MIN_VALID_LAP_TIME = 10; // seconds – ignore anything faster than this
 
+// --- BIKE COLLISIONS ---
+const BIKE_RADIUS_PLAYER = 5.2;   // tweak until it feels right
+const BIKE_RADIUS_BOT    = 5.0;
+const BIKE_PUSH_STRENGTH = 1.0;    // how hard we separate (1.0 = normal)
+const BIKE_BOUNCE_KICK   = 42;     // little knockback impulse
+const BIKE_NITRO_PENALTY = 8;      // lose nitro on hit (optional)
+let activeExplosions = [];
+const EXPLODE_COUNT_DESKTOP = 140000;
+const EXPLODE_COUNT_MOBILE  = 35000;
+
 // HUD elements
 let hudLapEl, hudSpeedEl, hudCurLapEl, hudBestLapEl, hudRecordEl;
 
@@ -212,6 +222,33 @@ let bikePulseTime = 999; // "inactive" when > duration
 let bikePulseTargets = []; // cached mesh materials on the player
 let trailBaseCore = null;
 let trailBaseEdge = null;
+
+// --- HP (global, single source of truth) ---
+const maxHP = 100;
+let hp = maxHP;
+const TRAIL_HIT_DAMAGE = 18;   // tweak: 10–30 feels good
+const TRAIL_IFRAME = 0.35;     // seconds (prevents spam while you're inside)
+let trailIFrameTimer = 0;
+let trailTouchLatched = false; // prevents repeated hits until you leave trail
+
+// HUD refs (assigned in init)
+let hpInner = null;
+let hpText  = null;
+
+function setHP(v){
+  hp = THREE.MathUtils.clamp(v, 0, maxHP);
+  if (hpText) hpText.textContent = Math.round(hp);
+  if (hpInner) {
+    const pct = (hp / maxHP) * 100;
+    hpInner.style.width = pct + "%";
+  }
+}
+
+function resetHP(){
+  setHP(maxHP);
+  trailIFrameTimer = 0;
+  trailTouchLatched = false;
+}
 
 // ---- AI bikes ----
 const bots = [];          // BotBike instances
@@ -1027,6 +1064,11 @@ function init() {
   hudRecordEl   = document.getElementById("hudRecord");
   hudNitroFillEl = document.getElementById("hudNitroFill");
   hudNitroTextEl = document.getElementById("hudNitroText");
+
+  hpInner = document.getElementById("hpInner");
+  hpText  = document.getElementById("hpText");
+  resetHP();
+
   setupTouchControls();
   initMinimap();
   introOverlayEl = document.getElementById("introOverlay");
@@ -1069,6 +1111,79 @@ function init() {
 function handleResize() {
   onWindowResize();
 }
+function resolveCircleCollisionXZ(aPos, aR, bPos, bR) {
+  const dx = aPos.x - bPos.x;
+  const dz = aPos.z - bPos.z;
+
+  const minDist = aR + bR;
+  const distSq = dx * dx + dz * dz;
+
+  // no hit
+  if (distSq >= minDist * minDist) return null;
+
+  // handle exact overlap (rare but happens)
+  if (distSq < 1e-8) {
+    // pick any stable normal
+    return { nx: 1, nz: 0, penetration: minDist };
+  }
+
+  const dist = Math.sqrt(distSq);
+  const nx = dx / dist;
+  const nz = dz / dist;
+  const penetration = minDist - dist;
+
+  return { nx, nz, penetration };
+}
+
+
+function applyXZPush(obj, nx, nz, amount) {
+  obj.position.x += nx * amount;
+  obj.position.z += nz * amount;
+}
+function handleBikeCollisions() {
+  if (!bike || !botsSpawned || gameState !== GAME_STATE.PLAYING) return false;
+
+  let didHit = false;
+
+  // Run a few passes so we fully separate even if we penetrated deeply
+  const ITER = 4;
+
+  for (let k = 0; k < ITER; k++) {
+    for (const bot of bots) {
+      const m = bot?.mesh;
+      if (!m) continue;
+
+      const hit = resolveCircleCollisionXZ(
+        bike.position, BIKE_RADIUS_PLAYER,
+        m.position,    BIKE_RADIUS_BOT
+      );
+
+      if (!hit) continue;
+
+      didHit = true;
+
+      // push them apart (add a tiny slop so we don't re-collide next pass)
+      const slop = 0.04;
+      const pen = (hit.penetration + slop);
+
+      // split push (you can bias this toward pushing bots more if you want)
+      const pushA = pen * 0.55;
+      const pushB = pen * 0.45;
+
+      bike.position.x += hit.nx * pushA;
+      bike.position.z += hit.nz * pushA;
+
+      m.position.x    -= hit.nx * pushB;
+      m.position.z    -= hit.nz * pushB;
+
+      // keep inside lane after being shoved
+      applyTrackBounce();
+    }
+  }
+
+  return didHit;
+}
+
 
 window.addEventListener("resize", handleResize);
 window.visualViewport?.addEventListener("resize", handleResize);
@@ -1506,7 +1621,7 @@ function showCrashMessage() {
   crashTitleEl.textContent = "You Crashed!!";
   crashSubtitleEl.innerHTML =
     `Press <span class="key">R</span> to reset<br>` +
-    `or <span class="key">Q</span> to restart`;
+    `or <span class="key">SPACE</span> to restart`;
   showOverlay();
 }
 
@@ -1522,40 +1637,81 @@ function onWindowResize() {
   composer.setSize(width, height);
 }
 
-function distancePointToSegment(p, a, b) {
-  // p, a, b are Vector3
-  const ab = b.clone().sub(a);
-  const ap = p.clone().sub(a);
-  const abLenSq = ab.lengthSq();
+function distancePointToSegmentXZ(p, a, b) {
+  const px = p.x, pz = p.z;
+  const ax = a.x, az = a.z;
+  const bx = b.x, bz = b.z;
 
-  if (abLenSq === 0) return ap.length(); // degenerate segment
+  const abx = bx - ax, abz = bz - az;
+  const apx = px - ax, apz = pz - az;
 
-  let t = ap.dot(ab) / abLenSq;
+  const abLenSq = abx * abx + abz * abz;
+  let t = abLenSq > 1e-8 ? (apx * abx + apz * abz) / abLenSq : 0;
   t = THREE.MathUtils.clamp(t, 0, 1);
 
-  const closest = a.clone().addScaledVector(ab, t);
-  return closest.distanceTo(p);
+  const cx = ax + abx * t;
+  const cz = az + abz * t;
+
+  const dx = px - cx, dz = pz - cz;
+  return Math.hypot(dx, dz);
 }
+
+function getBikeTestPoints() {
+  const pos = new THREE.Vector3();
+  bike.getWorldPosition(pos);
+
+  const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(bike.quaternion).setY(0).normalize();
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(bike.quaternion).setY(0).normalize();
+
+  // tweak these offsets if needed
+  return [
+    pos.clone(),                              // center
+    pos.clone().addScaledVector(fwd,  2.2),   // front
+    pos.clone().addScaledVector(fwd, -2.2),   // rear
+    pos.clone().addScaledVector(right, 1.3),  // side R
+    pos.clone().addScaledVector(right,-1.3),  // side L
+  ];
+}
+
+const TRAIL_HIT_RADIUS = 1.25; // bump a bit above your 0.8 tube radius
 
 function checkTrailCollision() {
   if (trailSegments.length < 2) return false;
 
-  const bikePos = new THREE.Vector3();
-  bike.getWorldPosition(bikePos);
-
-  // Skip the last few segments so we don't immediately collide with ourselves
-  const skipLast = 10;
-  const limit = Math.max(0, trailSegments.length - skipLast);
+  const pts = getBikeTestPoints();
+  const skipLastOwn = 12; // keep this for self-trail to avoid instant self-crash
+  const limit = Math.max(0, trailSegments.length - skipLastOwn);
 
   for (let i = 0; i < limit; i++) {
     const seg = trailSegments[i];
-    const d = distancePointToSegment(bikePos, seg.start, seg.end);
-    if (d < TRAIL_RADIUS * 0.9) {
-      return true;
+    for (const p of pts) {
+      if (distancePointToSegmentXZ(p, seg.start, seg.end) < TRAIL_HIT_RADIUS) return true;
     }
   }
   return false;
 }
+
+function checkOtherTrailsCollision() {
+  if (!bike || !botsSpawned) return false;
+
+  const pts = getBikeTestPoints();
+  const skipLastOther = 0; // ✅ IMPORTANT: don’t skip the newest bot trail segments
+
+  for (const bot of bots) {
+    const segs = bot?.trailSegments;
+    if (!segs || segs.length < 2) continue;
+
+    const limit = Math.max(0, segs.length - skipLastOther);
+    for (let i = 0; i < limit; i++) {
+      const seg = segs[i];
+      for (const p of pts) {
+        if (distancePointToSegmentXZ(p, seg.start, seg.end) < TRAIL_HIT_RADIUS) return true;
+      }
+    }
+  }
+  return false;
+}
+
 
 function createStartGate() {
   const gateWidth     = TRACK_HALF_WIDTH * 2.30;  // a bit wider than lane
@@ -1847,17 +2003,13 @@ function applyTrackBounce() {
 
 }
 
-
 function handleCollisions() {
   if (gameState !== GAME_STATE.PLAYING) return;
+  const hitWall = checkWallCollision();
 
-  if (checkTrailCollision() || checkWallCollision()) {
-    // trigger crash
-    gameState = GAME_STATE.CRASHED;
-    audioMgr?.setWhoosh(false); // ✅ stop immediately
-    engineStarted = false;   // lets GO restart engine cleanly
-    showCrashMessage();  
-    console.log("CRASH!");
+  if (hitWall) {
+    crashFromHP(); // or keep your older crash code, but reuse this is clean
+    console.log("CRASH! hitWall:", hitWall);
   }
 }
 
@@ -1875,7 +2027,7 @@ function placeBotNow(bot, track) {
 function resetGame() {
   gameState = GAME_STATE.WAITING;
   timeScale = 1.0;
-  // shakeIntensity = 0.0;
+  resetHP();
 
   DEBUG_FREE_CAMERA = false; // force back to game camera on reset
 
@@ -1891,6 +2043,7 @@ function resetGame() {
   if (ghostBike) {
     ghostBike.visible = false;
   }
+  if (bike) bike.visible = true;
   lastGhostSampleTime = 0;
   ghostTrailPositions.length = 0;
   ghostTrailSegments.length = 0;
@@ -1973,6 +2126,7 @@ function startGame() {
   gameState = GAME_STATE.PLAYING;
   timeScale = 1.0;
   hideOverlay();
+  resetHP();
 
   // ✅ show trails now
   if (trailMesh) trailMesh.visible = true;
@@ -2448,6 +2602,194 @@ function trySpawnBots() {
   spawnBots(trackData, pendingBotMeshes);
   pendingBotMeshes = null;
 }
+function explodeBikePixels(obj) {
+  if (!obj) return;
+
+  const count = (matchMedia("(hover: none) and (pointer: coarse)").matches)
+    ? EXPLODE_COUNT_MOBILE
+    : EXPLODE_COUNT_DESKTOP;
+
+  const { positions, velocities } = sampleObjectPoints(obj, count);
+
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geom.setAttribute("velocity", new THREE.BufferAttribute(velocities, 3));
+
+  // “Pixel” look: PointsMaterial already renders square sprites.
+  const mat = new THREE.PointsMaterial({
+    size: 0.22,                 // tune “pixel size”
+    transparent: true,
+    opacity: 1.0,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    vertexColors: false,
+    color: new THREE.Color(0xff6a00) // warm explosion tone; you can animate to red too
+  });
+
+  const pts = new THREE.Points(geom, mat);
+  pts.frustumCulled = false;
+  scene.add(pts);
+
+  activeExplosions.push({
+    points: pts,
+    life: 0,
+    maxLife: 1.2,   // seconds
+    gravity: 16.0,
+    drag: 0.92
+  });
+}
+function sampleObjectPoints(obj, count) {
+  // Collect meshes + their position attributes
+  const sources = [];
+  obj.updateMatrixWorld(true);
+
+  obj.traverse((c) => {
+    if (!c.isMesh || !c.geometry) return;
+    const pos = c.geometry.attributes?.position;
+    if (!pos || pos.count < 3) return;
+    sources.push({ mesh: c, pos });
+  });
+
+  // Fallback if something weird happens
+  if (!sources.length) {
+    return {
+      positions: new Float32Array(3),
+      velocities: new Float32Array(3),
+    };
+  }
+
+  const positions = new Float32Array(count * 3);
+  const velocities = new Float32Array(count * 3);
+
+  // Explosion origin (bike center)
+  const origin = new THREE.Vector3();
+  obj.getWorldPosition(origin);
+
+  const tmp = new THREE.Vector3();
+  const world = new THREE.Vector3();
+  const dir = new THREE.Vector3();
+
+  for (let i = 0; i < count; i++) {
+    const src = sources[(Math.random() * sources.length) | 0];
+    const idx = (Math.random() * src.pos.count) | 0;
+
+    tmp.fromBufferAttribute(src.pos, idx);
+    world.copy(tmp).applyMatrix4(src.mesh.matrixWorld);
+
+    const j = i * 3;
+    positions[j + 0] = world.x;
+    positions[j + 1] = world.y;
+    positions[j + 2] = world.z;
+
+    // Velocity: outward + slight forward bias + randomness
+    dir.copy(world).sub(origin);
+    if (dir.lengthSq() < 1e-6) dir.set(Math.random()-0.5, Math.random(), Math.random()-0.5);
+    dir.normalize();
+
+    const speed = 18 + Math.random() * 55;
+    velocities[j + 0] = dir.x * speed + (Math.random() - 0.5) * 8;
+    velocities[j + 1] = dir.y * speed + (Math.random()) * 18;
+    velocities[j + 2] = dir.z * speed + (Math.random() - 0.5) * 8;
+  }
+
+  return { positions, velocities };
+}
+function updateExplosions(dt) {
+  if (!activeExplosions.length) return;
+
+  for (let e = activeExplosions.length - 1; e >= 0; e--) {
+    const ex = activeExplosions[e];
+    ex.life += dt;
+
+    const pts = ex.points;
+    const geom = pts.geometry;
+    const posA = geom.getAttribute("position");
+    const velA = geom.getAttribute("velocity");
+
+    const drag = Math.pow(ex.drag, dt * 60);
+
+    for (let i = 0; i < posA.count; i++) {
+      const ix = i * 3;
+
+      // gravity
+      velA.array[ix + 1] -= ex.gravity * dt;
+
+      // drag
+      velA.array[ix + 0] *= drag;
+      velA.array[ix + 1] *= drag;
+      velA.array[ix + 2] *= drag;
+
+      // integrate
+      posA.array[ix + 0] += velA.array[ix + 0] * dt;
+      posA.array[ix + 1] += velA.array[ix + 1] * dt;
+      posA.array[ix + 2] += velA.array[ix + 2] * dt;
+    }
+
+    posA.needsUpdate = true;
+    velA.needsUpdate = true;
+
+    // fade out
+    const t = THREE.MathUtils.clamp(ex.life / ex.maxLife, 0, 1);
+    pts.material.opacity = 1.0 - t;
+    pts.material.size = 0.22 + 0.18 * t; // pixels “spread” slightly
+
+    // remove
+    if (ex.life >= ex.maxLife) {
+      scene.remove(pts);
+      pts.geometry.dispose();
+      pts.material.dispose();
+      activeExplosions.splice(e, 1);
+    }
+  }
+}
+function crashFromHP() {
+  gameState = GAME_STATE.CRASHED;
+  audioMgr?.setWhoosh(false);
+  engineStarted = false;
+
+  explodeBikePixels(bike);
+  bike.visible = false;
+
+  showCrashMessage();
+}
+
+function updateDamage(dt){
+  if (gameState !== GAME_STATE.PLAYING) return;
+
+  trailIFrameTimer = Math.max(0, trailIFrameTimer - dt);
+
+  const touchingTrail = checkTrailCollision() || checkOtherTrailsCollision();
+
+  if (!touchingTrail) {
+    trailTouchLatched = false;
+    return;
+  }
+
+  if (!trailTouchLatched && trailIFrameTimer <= 0) {
+    trailTouchLatched = true;
+    trailIFrameTimer = TRAIL_IFRAME;
+
+    const nextHP = hp - TRAIL_HIT_DAMAGE;
+    setHP(nextHP);
+
+    // ✅ crash FIRST so nothing can prevent it
+    if (nextHP <= 0) {
+      crashFromHP();
+      return;
+    }
+
+    // ✅ use audioMgr (not audio)
+    audioMgr?.playDamage?.();
+
+    const el = document.getElementById("damageFlash");
+    if (el) {
+      el.classList.remove("on");
+      void el.offsetWidth;
+      el.classList.add("on");
+    }
+  }
+}
+
 
 function animate() {
   requestAnimationFrame(animate);
@@ -2592,10 +2934,12 @@ function animate() {
     );
 
     // 5. Trail & collisions only while playing
-    if (gameState === GAME_STATE.PLAYING) {
+    if (gameState === GAME_STATE.PLAYING) {     
       updateBoosters(rawDt);
       updateTrail();
       updateLaps();
+      handleBikeCollisions(gameDt);
+      updateDamage(gameDt);  
       handleCollisions();
     }
     
@@ -2713,7 +3057,8 @@ function animate() {
   updateHUD(rawDt);
   applyBikePickupPulse(rawDt);
   updateMinimap();
-  
+  updateExplosions(rawDt);
+
   const boostPulse = (keys.nitro && nitro > 0 && gameState === GAME_STATE.PLAYING) ? 0.7 : 0.0;
   env?.update(t, rawDt, boostPulse);
   composer.render(scene, camera);
