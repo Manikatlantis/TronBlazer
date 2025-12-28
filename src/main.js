@@ -77,7 +77,6 @@ let minimapGateCache = null;  // cached gate line endpoints in minimap space
 const currentTrack = tracks.arena1;
 const BOUNCE_STRENGTH   = 0.3;// how strongly it pushes/reflects
 const TRACK_HALF_WIDTH = currentTrack.halfWidth;
-env?.setTrack(currentTrack.points, currentTrack.halfWidth);
 
 const CAMERA_MODE = {
   CHASE: "CHASE",
@@ -91,7 +90,7 @@ const trackPoints = currentTrack.points.map(
 );
 
 let trailMaterial, trailMesh;  // For the tron trail
-const MAX_TRAIL_POINTS = 200;
+const MAX_TRAIL_POINTS = 100;
 const trailPositions = [];
 
 const GAME_STATE = {
@@ -162,6 +161,12 @@ let ghostTimeScale = 0.89; // < 1.0 slows ghost, > 1.0 speeds it up
 let ghostActive = false;
 const GHOST_SAMPLE_INTERVAL = 1 / 60; // seconds between recorded frames
 let lastGhostSampleTime = 0;
+
+// ---- AI bikes ----
+const bots = [];          // BotBike instances
+let trackData = null;     // { pts2, segLens, totalLen, halfWidth } for bot movement
+let botsSpawned = false;
+let pendingBotMeshes = null;
 
 // direction along the track near spawn (XZ)
 const startDir2D   = p1.clone().sub(p0).normalize();
@@ -532,6 +537,161 @@ if (bike) {
   ctx.strokeRect(0.5, 0.5, MINIMAP_SIZE - 1, MINIMAP_SIZE - 1);
 }
 
+function spawnBots(track, botMeshes) {
+  if (!track || !botMeshes?.length) return;
+
+  const playerS0 = getPlayerSOnTrack(SPAWN_POS, track);
+
+  // wider side-by-side spacing (parallel to the gate)
+  const laneW = track.halfWidth * 0.95;
+  const lanes = [-laneW, 0, laneW];
+
+  for (let i = 0; i < botMeshes.length; i++) {
+    const mesh = botMeshes[i];
+
+    // keep them close to start but not stacked on top of you
+    const s0 = playerS0 - (i + 1) * 10;   // small longitudinal stagger
+    const bot = new BotBike(mesh, s0, lanes[i % lanes.length]);
+
+    bot.initTrail();
+    placeBotNow(bot, track);              // ✅ ensures they’re visible immediately
+    bots.push(bot);
+  }
+
+  botsSpawned = true;
+}
+
+
+function getPlayerSOnTrack(playerPos3, track) {
+  const p = new THREE.Vector2(playerPos3.x, playerPos3.z);
+
+  let best = Infinity;
+  let bestS = 0;
+  let acc = 0;
+
+  for (let i = 0; i < track.pts2.length - 1; i++) {
+    const a = track.pts2[i];
+    const b = track.pts2[i + 1];
+    const ab = b.clone().sub(a);
+    const ap = p.clone().sub(a);
+
+    const abLen2 = ab.lengthSq();
+    let t = abLen2 > 0 ? ap.dot(ab) / abLen2 : 0;
+    t = THREE.MathUtils.clamp(t, 0, 1);
+
+    const proj = a.clone().add(ab.multiplyScalar(t));
+    const d = proj.distanceTo(p);
+
+    if (d < best) {
+      best = d;
+      bestS = acc + t * track.segLens[i];
+    }
+    acc += track.segLens[i];
+  }
+  return bestS;
+}
+
+function pointAndDirAtS(pts2, segLens, totalLen, s) {
+  // wrap around for looping track
+  s = ((s % totalLen) + totalLen) % totalLen;
+
+  let i = 0;
+  while (i < segLens.length && s > segLens[i]) {
+    s -= segLens[i];
+    i++;
+  }
+  i = Math.min(i, segLens.length - 1);
+
+  const a = pts2[i];
+  const b = pts2[i + 1];
+
+  const t = segLens[i] > 0 ? s / segLens[i] : 0;
+  const p = a.clone().lerp(b, t);
+  const dir = b.clone().sub(a).normalize(); // tangent
+
+  return { p, dir, segIndex: i };
+}
+
+class BotBike {
+  constructor(mesh, s0, laneOffset = 0) {
+    this.mesh = mesh;
+    this.s = s0;
+
+    // Start near player speed
+    this.speed = forwardSpeed;
+
+    this.laneOffset = laneOffset;
+    this.targetLane = laneOffset;
+
+    // --- bot trail state ---
+    this.trailMaterial = null;
+    this.trailMesh = null;
+    this.trailPositions = [];
+    this.trailSegments = [];
+  }
+
+  initTrail() {
+    // same look as player (same colors / shader), just slightly dimmer if you want
+    this.trailMaterial = makeTrailMaterial(0xff5503, 0xff5503, 0.50);
+    this.trailMesh = makeTrailMeshFor(this.mesh, this.trailMaterial);
+  }
+
+  resetTrailGeometry() {
+    if (!this.trailMesh) return;
+    this.trailPositions.length = 0;
+    this.trailSegments.length = 0;
+
+    this.trailMesh.geometry.dispose();
+    const p0 = this.mesh.position.clone();
+    const p1 = this.mesh.position.clone().add(new THREE.Vector3(0, 0, -1));
+    const curve = new THREE.CatmullRomCurve3([p0, p1]);
+    this.trailMesh.geometry = new THREE.TubeGeometry(curve, 32, 0.8, 24, false);
+  }
+
+  update(dt, track, playerS, playerSpeed) {
+    // match player speed, then add a small rubber-band so they don't drift too far
+    const baseSpeed = playerSpeed ?? forwardSpeed;
+
+    const gap = this._wrapDelta(playerS - this.s, track.totalLen);
+    const rubber = THREE.MathUtils.clamp(gap * 0.04, -120, 120);
+
+    this.speed = THREE.MathUtils.lerp(this.speed, baseSpeed + rubber, 0.12);
+
+    // move forward along spline distance
+    this.s += this.speed * dt;
+
+    const { p, dir } = pointAndDirAtS(track.pts2, track.segLens, track.totalLen, this.s);
+
+    // right normal
+    const right = new THREE.Vector2(dir.y, -dir.x).normalize();
+
+    // smooth lane changes
+    this.laneOffset = THREE.MathUtils.lerp(this.laneOffset, this.targetLane, 0.06);
+
+    const pos2 = p.clone().add(right.multiplyScalar(this.laneOffset));
+
+    const baseY = 0.7;
+    this.mesh.position.set(
+      pos2.x,
+      baseY + Math.sin(performance.now() * 0.002 + this.s * 0.01) * 0.05,
+      pos2.y
+    );
+
+    const yaw = Math.atan2(dir.x, dir.y) + Math.PI;
+    this.mesh.rotation.set(0, yaw, 0);
+
+    // --- draw bot trail (only if created) ---
+    if (this.trailMesh) {
+      updateTrailFor(this.mesh, this.trailMesh, this.trailPositions, this.trailSegments);
+    }
+  }
+
+  _wrapDelta(d, L) {
+    d = ((d + L * 0.5) % L) - L * 0.5;
+    return d;
+  }
+}
+
 
 function init() {
   const width = window.innerWidth;
@@ -605,6 +765,16 @@ function init() {
   initMinimap();
   showReadyToStartMessage();  // show "Press Q" on first load
   initGateFromPoints();
+
+  // BOT DATA
+  const { segLens, total } = computeTrackLengths2D(trackPoints);
+  trackData = {
+    pts2: trackPoints,           // Vector2[]
+    segLens,
+    totalLen: total,             // <-- MUST be totalLen (your BotBike uses this)
+    halfWidth: TRACK_HALF_WIDTH,
+    };
+
   // World
   loadArena();
   loadBike();
@@ -680,6 +850,19 @@ function loadBike() {
       // -------------------------
 
       bikeReady = true;
+      // ---- BOT BIKE SETUP ----
+      const botMeshes = [];
+      for (let i = 0; i < 3; i++) {
+        const bot = bike.clone(true);
+        bot.position.copy(bike.position); // temporary; bot update will place it
+        bot.rotation.copy(bike.rotation);
+        scene.add(bot);
+        botMeshes.push(bot);
+      }
+
+      // ensure trackData exists before spawning
+      if (trackData) spawnBots(trackData, botMeshes);
+
       createPlayerTrail();
       createGhostTrail();
     },
@@ -1370,6 +1553,17 @@ function handleCollisions() {
   }
 }
 
+function placeBotNow(bot, track) {
+  const { p, dir } = pointAndDirAtS(track.pts2, track.segLens, track.totalLen, bot.s);
+  const right = new THREE.Vector2(dir.y, -dir.x).normalize(); // parallel to gate
+
+  const pos2 = p.clone().add(right.multiplyScalar(bot.laneOffset));
+  bot.mesh.position.set(pos2.x, 0.7, pos2.y);
+
+  const yaw = Math.atan2(dir.x, dir.y) + Math.PI;
+  bot.mesh.rotation.set(0, yaw, 0);
+}
+
 function resetGame() {
   gameState = GAME_STATE.WAITING;
   timeScale = 1.0;
@@ -1433,7 +1627,20 @@ function resetGame() {
   engineStarted = false;
   lapTimerArmed = false;
   audioMgr?.setWhoosh(false);
-
+  nitro = 0;
+  for (const b of boosters) {
+    b.active = true;
+    b.respawnAt = 0;
+    if (b.mesh) { b.mesh.visible = true; setObjectOpacity(b.mesh, 1.0); }
+  }
+  if (trackData) {
+    const playerS0 = getPlayerSOnTrack(SPAWN_POS, trackData);
+    for (let i = 0; i < bots.length; i++) {
+      bots[i].s = playerS0 - (i + 1) * 60;
+      bots[i].speed = forwardSpeed;
+      bots[i].resetTrailGeometry?.();
+    }
+  }
 }
 
 function flashStartGate() {
@@ -1633,7 +1840,7 @@ function createTutorialBooster() {
   // Attach to camera so it always stays in view
   camera.add(mesh);
   const side = (TUTORIAL_ORB_SIDE === "left") ? -1 : 1;
-  mesh.position.set(-8 * side, -10.2, -7);  // in front of camera
+  mesh.position.set(-8 * side, -0.2, -7);  // in front of camera
   mesh.scale.setScalar(2.6);
 
   tutorialBooster = mesh;
@@ -1790,6 +1997,13 @@ function makeUniqueMaterials(obj) {
   });
 }
 
+function trySpawnBots() {
+  if (botsSpawned) return;
+  if (!trackData) return;
+  if (!pendingBotMeshes) return;
+  spawnBots(trackData, pendingBotMeshes);
+  pendingBotMeshes = null;
+}
 
 function animate() {
   requestAnimationFrame(animate);
@@ -1814,6 +2028,12 @@ function animate() {
   
   if (ghostTrailMaterial && ghostTrailMaterial.uniforms?.uTime) {
   ghostTrailMaterial.uniforms.uTime.value = t;
+  }
+
+  for (const b of bots) {
+    if (b.trailMaterial?.uniforms?.uTime) {
+      b.trailMaterial.uniforms.uTime.value = t;
+    }
   }
 
   if (bikeReady && bike) {
@@ -1975,6 +2195,10 @@ function animate() {
     } else if (ghostBike && !ghostActive) {
       ghostBike.visible = false;
     }
+    if (botsSpawned && trackData && bike && gameState === GAME_STATE.PLAYING) {
+      const playerS = getPlayerSOnTrack(bike.position, trackData);
+      for (const b of bots) b.update(gameDt, trackData, playerS, speedNow);
+    }
 
     // 6. Camera
     if (DEBUG_FREE_CAMERA) {
@@ -2044,6 +2268,7 @@ function animate() {
   }
   updateHUD(rawDt);
   updateMinimap();
+  
   const boostPulse = (keys.nitro && nitro > 0 && gameState === GAME_STATE.PLAYING) ? 0.7 : 0.0;
   env?.update(t, rawDt, boostPulse);
   composer.render(scene, camera);
