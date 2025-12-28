@@ -167,6 +167,11 @@ const bots = [];          // BotBike instances
 let trackData = null;     // { pts2, segLens, totalLen, halfWidth } for bot movement
 let botsSpawned = false;
 let pendingBotMeshes = null;
+const BOT_BASE_SPEED = 450;   // faster than your 400
+const BOT_MAX_SPEED  = 520;   // cap so they don’t go insane
+const BOT_MIN_SPEED  = 330;
+
+function randRange(a, b) { return a + Math.random() * (b - a); }
 
 // direction along the track near spawn (XZ)
 const startDir2D   = p1.clone().sub(p0).normalize();
@@ -551,7 +556,7 @@ function spawnBots(track, botMeshes) {
 
     // keep them close to start but not stacked on top of you
     const s0 = playerS0 - (i + 1) * 10;   // small longitudinal stagger
-    const bot = new BotBike(mesh, s0, lanes[i % lanes.length]);
+    const bot = new BotBike(mesh, s0, lanes[i % lanes.length], lanes);
 
     bot.initTrail();
     placeBotNow(bot, track);              // ✅ ensures they’re visible immediately
@@ -613,15 +618,32 @@ function pointAndDirAtS(pts2, segLens, totalLen, s) {
 }
 
 class BotBike {
-  constructor(mesh, s0, laneOffset = 0) {
+  constructor(mesh, s0, laneOffset = 0, lanes = [0]) {
     this.mesh = mesh;
     this.s = s0;
 
-    // Start near player speed
-    this.speed = forwardSpeed;
+    this.lanes = lanes;
+
+    // --- individual “personality” ---
+    this.basePace = BOT_BASE_SPEED * (1.0 + randRange(-0.03, 0.06)); // 435–477ish
+    this.reaction = randRange(0.06, 0.16);   // smoothing (lower = floaty, higher = snappy)
+    this.rubberK  = randRange(0.02, 0.06);   // how strongly it rubber-bands to you
+
+    this.oscFreq  = randRange(0.4, 0.9);     // speed oscillation rate
+    this.oscAmp   = randRange(10, 30);       // oscillation amplitude
+    this.oscPhase = Math.random() * Math.PI * 2;
+
+    this.jitter = 0;                         // random-walk speed jitter
+    this.jitterAccel = randRange(20, 45);    // how quickly jitter changes
+    this.jitterMax = randRange(18, 42);      // cap jitter so it stays subtle
+
+    this.speed = this.basePace;
 
     this.laneOffset = laneOffset;
     this.targetLane = laneOffset;
+
+    this.nextLaneChangeAt = 0;               // seconds
+    this.laneChangeEvery  = randRange(1.4, 3.2);
 
     // --- bot trail state ---
     this.trailMaterial = null;
@@ -631,7 +653,6 @@ class BotBike {
   }
 
   initTrail() {
-    // same look as player (same colors / shader), just slightly dimmer if you want
     this.trailMaterial = makeTrailMaterial(0xff5503, 0xff5503, 0.50);
     this.trailMesh = makeTrailMeshFor(this.mesh, this.trailMaterial);
   }
@@ -648,24 +669,54 @@ class BotBike {
     this.trailMesh.geometry = new THREE.TubeGeometry(curve, 32, 0.8, 24, false);
   }
 
-  update(dt, track, playerS, playerSpeed) {
-    // match player speed, then add a small rubber-band so they don't drift too far
-    const baseSpeed = playerSpeed ?? forwardSpeed;
-
+  update(dt, track, playerS, playerSpeed, timeNow) {
+    // how far behind/ahead of player along the loop (signed shortest distance)
     const gap = this._wrapDelta(playerS - this.s, track.totalLen);
-    const rubber = THREE.MathUtils.clamp(gap * 0.04, -120, 120);
 
-    this.speed = THREE.MathUtils.lerp(this.speed, baseSpeed + rubber, 0.12);
+    // rubber-band: pull them toward player, but each bot has different strength
+    const rubber = THREE.MathUtils.clamp(gap * (this.rubberK), -90, 90);
 
-    // move forward along spline distance
+    // per-bot oscillation (prevents perfect sync)
+    const osc = Math.sin(timeNow * this.oscFreq + this.oscPhase) * this.oscAmp;
+
+    // random-walk jitter (also breaks sync)
+    this.jitter += (Math.random() * 2 - 1) * this.jitterAccel * dt;
+    this.jitter = THREE.MathUtils.clamp(this.jitter, -this.jitterMax, this.jitterMax);
+
+    // IMPORTANT:
+    // baseline faster than you (450ish), but still reacts a bit to you and gap
+    let desired = this.basePace + rubber + osc + this.jitter;
+
+    // optional: if you want bots to respond slightly when you nitro (not required)
+    // desired = Math.max(desired, (playerSpeed ?? forwardSpeed) * 0.92);
+
+    desired = THREE.MathUtils.clamp(desired, BOT_MIN_SPEED, BOT_MAX_SPEED);
+
+    // smooth speed change with bot-specific “reaction”
+    this.speed = THREE.MathUtils.lerp(this.speed, desired, this.reaction);
+
+    // move forward along track distance
     this.s += this.speed * dt;
 
-    const { p, dir } = pointAndDirAtS(track.pts2, track.segLens, track.totalLen, this.s);
+    // lane change timing (each bot different)
+    if (timeNow >= this.nextLaneChangeAt) {
+      this.nextLaneChangeAt = timeNow + this.laneChangeEvery + randRange(-0.3, 0.6);
 
-    // right normal
+      // pick a new lane (not the current one)
+      if (this.lanes.length > 1) {
+        let choice = this.targetLane;
+        let tries = 0;
+        while (choice === this.targetLane && tries++ < 6) {
+          choice = this.lanes[Math.floor(Math.random() * this.lanes.length)];
+        }
+        this.targetLane = choice;
+      }
+    }
+
+    const { p, dir } = pointAndDirAtS(track.pts2, track.segLens, track.totalLen, this.s);
     const right = new THREE.Vector2(dir.y, -dir.x).normalize();
 
-    // smooth lane changes
+    // smooth lane movement
     this.laneOffset = THREE.MathUtils.lerp(this.laneOffset, this.targetLane, 0.06);
 
     const pos2 = p.clone().add(right.multiplyScalar(this.laneOffset));
@@ -680,7 +731,6 @@ class BotBike {
     const yaw = Math.atan2(dir.x, dir.y) + Math.PI;
     this.mesh.rotation.set(0, yaw, 0);
 
-    // --- draw bot trail (only if created) ---
     if (this.trailMesh) {
       updateTrailFor(this.mesh, this.trailMesh, this.trailPositions, this.trailSegments);
     }
@@ -691,7 +741,6 @@ class BotBike {
     return d;
   }
 }
-
 
 function init() {
   const width = window.innerWidth;
@@ -2197,7 +2246,7 @@ function animate() {
     }
     if (botsSpawned && trackData && bike && gameState === GAME_STATE.PLAYING) {
       const playerS = getPlayerSOnTrack(bike.position, trackData);
-      for (const b of bots) b.update(gameDt, trackData, playerS, speedNow);
+      for (const b of bots) b.update(gameDt, trackData, playerS, speedNow, t);
     }
 
     // 6. Camera
