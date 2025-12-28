@@ -33,7 +33,7 @@ let keys = { left: false, right: false, nitro: false};
 let crashMessageEl = null;
 let crashTitleEl = null;
 let crashSubtitleEl = null;
-let forwardSpeed = 300;
+let forwardSpeed = 340;
 let lastGateSide = null;
 let countdownStep = -1;
 let countdownTimer = 0;
@@ -100,6 +100,19 @@ const GAME_STATE = {
   PLAYING: "PLAYING",
   CRASHED: "CRASHED",
 };
+let introOverlayEl = null;
+let introSeen = false;
+
+function showIntro() {
+  if (!introOverlayEl) introOverlayEl = document.getElementById("introOverlay");
+  if (!introOverlayEl) return;
+  introOverlayEl.classList.add("visible");
+}
+
+function hideIntro() {
+  if (!introOverlayEl) return;
+  introOverlayEl.classList.remove("visible");
+}
 
 // Build 2D segments from your centerline points (XZ plane)
 const trackSegments2D = [];
@@ -149,6 +162,7 @@ const MIN_VALID_LAP_TIME = 10; // seconds – ignore anything faster than this
 
 // HUD elements
 let hudLapEl, hudSpeedEl, hudCurLapEl, hudBestLapEl, hudRecordEl;
+
 
 const p0 = trackPoints[0];          // Vector2
 const p1 = trackPoints[1];          // Vector2
@@ -211,8 +225,21 @@ let gatePlaneNormal;  // normal of the plane (which side we're on)
 // how much bigger than the raw points to treat as "in the gate zone"
 const GATE_X_MARGIN = 10;   // side-to-side tolerance
 const GATE_Z_MARGIN = 10;   // along-the-gate tolerance
+window.addEventListener("pointerdown", () => {
+  if (!introSeen) {
+    introSeen = true;
+    hideIntro();
+    showReadyToStartMessage();
+  }
+});
 
 window.addEventListener("keydown", (e) => {
+  if (!introSeen) {
+    introSeen = true;
+    hideIntro();
+    showReadyToStartMessage(); // ✅ now show the READY TO RIDE screen
+    return; 
+  }
   if (e.code === "ArrowLeft" || e.code === "KeyA") keys.left = true;
   if (e.code === "ArrowRight" || e.code === "KeyD") keys.right = true;
   if (e.code === "ShiftLeft" || e.code === "ShiftRight") keys.nitro = true;
@@ -856,7 +883,8 @@ function init() {
   hudNitroTextEl = document.getElementById("hudNitroText");
 
   initMinimap();
-  showReadyToStartMessage();  // show "Press Q" on first load
+  introOverlayEl = document.getElementById("introOverlay");
+  showIntro();               // ✅ first screen
   initGateFromPoints();
 
   // BOT DATA

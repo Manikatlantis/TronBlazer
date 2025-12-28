@@ -39,7 +39,7 @@ export function createAudioManager(camera) {
   }
 
   function load() {
-    loader.load("./public/audio/tron_bgm.mp3", (buffer) => {
+    loader.load("./public/audio/tron_bgm2.mp3", (buffer) => {
       bgm.setBuffer(buffer);
       bgmLoaded = true;
       if (wantBgm && !bgm.isPlaying) bgm.play();
