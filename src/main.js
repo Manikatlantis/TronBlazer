@@ -33,7 +33,7 @@ let keys = { left: false, right: false, nitro: false};
 let crashMessageEl = null;
 let crashTitleEl = null;
 let crashSubtitleEl = null;
-let forwardSpeed = 400;
+let forwardSpeed = 300;
 let lastGateSide = null;
 let countdownStep = -1;
 let countdownTimer = 0;
@@ -170,6 +170,9 @@ let pendingBotMeshes = null;
 const BOT_BASE_SPEED = 450;   // faster than your 400
 const BOT_MAX_SPEED  = 520;   // cap so they don’t go insane
 const BOT_MIN_SPEED  = 330;
+const clamp01 = (t) => Math.max(0, Math.min(1, t));
+const smoothstep = (t) => t * t * (3 - 2 * t);
+const lerp = (a, b, t) => a + (b - a) * t;
 
 function randRange(a, b) { return a + Math.random() * (b - a); }
 
@@ -656,11 +659,16 @@ class BotBike {
     this.jitter = 0;                         // random-walk speed jitter
     this.jitterAccel = randRange(20, 45);    // how quickly jitter changes
     this.jitterMax = randRange(18, 42);      // cap jitter so it stays subtle
-
     this.speed = this.basePace;
-
     this.laneOffset = laneOffset;
-    this.targetLane = laneOffset;
+
+    // lane-change animation state
+    this.laneFrom = laneOffset;
+    this.laneTo = laneOffset;
+    this.laneT = 1;                         // 0..1 progress
+    this.laneDur = randRange(0.30, 0.55);   // seconds (random feels human)
+    this.targetLane = laneOffset;           // keep this variable (used by your chooser)
+
 
     this.nextLaneChangeAt = 0;               // seconds
     this.laneChangeEvery  = randRange(1.4, 3.2);
@@ -673,7 +681,8 @@ class BotBike {
   }
 
   initTrail() {
-    this.trailMaterial = makeTrailMaterial(0xff5503, 0xff5503, 0.50);
+    const c = this.mesh.userData.mapColor ?? 0x00ffff;
+    this.trailMaterial = makeTrailMaterial(c, c, 0.45);
     this.trailMesh = makeTrailMeshFor(this.mesh, this.trailMaterial);
   }
 
@@ -730,6 +739,12 @@ class BotBike {
           choice = this.lanes[Math.floor(Math.random() * this.lanes.length)];
         }
         this.targetLane = choice;
+        // start a smooth lane change
+        this.laneFrom = this.laneOffset;
+        this.laneTo   = this.targetLane;
+        this.laneT    = 0;
+        this.laneDur  = randRange(0.30, 0.55);
+
       }
     }
 
@@ -737,7 +752,15 @@ class BotBike {
     const right = new THREE.Vector2(dir.y, -dir.x).normalize();
 
     // smooth lane movement
-    this.laneOffset = THREE.MathUtils.lerp(this.laneOffset, this.targetLane, 0.06);
+    // smooth lane movement (time-based eased S-curve)
+    if (this.laneT < 1) {
+      this.laneT = Math.min(1, this.laneT + dt / this.laneDur);
+      const a = smoothstep(this.laneT);
+      this.laneOffset = lerp(this.laneFrom, this.laneTo, a);
+    } else {
+      this.laneOffset = this.laneTo;
+    }
+
 
     const pos2 = p.clone().add(right.multiplyScalar(this.laneOffset));
 
@@ -921,13 +944,33 @@ function loadBike() {
       bikeReady = true;
       // ---- BOT BIKE SETUP ----
       const botMeshes = [];
+      const BOT_COLORS = [0x00ffff, 0xff00ff, 0x00ff55]; // pick any 3
+
       for (let i = 0; i < 3; i++) {
         const bot = bike.clone(true);
-        bot.position.copy(bike.position); // temporary; bot update will place it
+
+        // IMPORTANT: make their materials unique so recolor doesn’t affect player
+        makeUniqueMaterials(bot);
+
+        // tint bot mesh
+        bot.traverse((child) => {
+          if (child.isMesh && child.material) {
+            child.material.color?.setHex(BOT_COLORS[i % BOT_COLORS.length]);
+            if ("emissive" in child.material) {
+              child.material.emissive?.setHex(BOT_COLORS[i % BOT_COLORS.length]);
+              child.material.emissiveIntensity = 1.5;
+            }
+          }
+        });
+
+        bot.userData.mapColor = BOT_COLORS[i % BOT_COLORS.length]; // for minimap
+        bot.position.copy(bike.position);
         bot.rotation.copy(bike.rotation);
+
         scene.add(bot);
         botMeshes.push(bot);
       }
+
 
       // ensure trackData exists before spawning
       if (trackData) spawnBots(trackData, botMeshes);
