@@ -684,6 +684,7 @@ class BotBike {
     const c = this.mesh.userData.mapColor ?? 0x00ffff;
     this.trailMaterial = makeTrailMaterial(c, c, 0.45);
     this.trailMesh = makeTrailMeshFor(this.mesh, this.trailMaterial);
+    this.trailMesh.visible = false; // ✅
   }
 
   resetTrailGeometry() {
@@ -1181,11 +1182,13 @@ function makeTrailMeshFor(obj, material) {
 function createPlayerTrail() {
   trailMaterial = makeTrailMaterial(0xff5503, 0xff5503, 0.55);
   trailMesh = makeTrailMeshFor(bike, trailMaterial);
+  trailMesh.visible = false; // ✅ hide until race starts
 }
 
 function createGhostTrail() {
   ghostTrailMaterial = makeTrailMaterial(0x00ffff, 0x00aaff, 0.35);
   ghostTrailMesh = makeTrailMeshFor(ghostBike, ghostTrailMaterial);
+  ghostTrailMesh.visible = false; // ✅
 }
 
 function updateTrail() {
@@ -1753,6 +1756,10 @@ function resetGame() {
       bots[i].resetTrailGeometry?.();
     }
   }
+  if (trailMesh) trailMesh.visible = false;
+    if (ghostTrailMesh) ghostTrailMesh.visible = false;
+    for (const b of bots) if (b.trailMesh) b.trailMesh.visible = false;
+
 }
 
 function flashStartGate() {
@@ -1773,6 +1780,17 @@ function startGame() {
   gameState = GAME_STATE.PLAYING;
   timeScale = 1.0;
   hideOverlay();
+
+  // ✅ show trails now
+  if (trailMesh) trailMesh.visible = true;
+  if (ghostTrailMesh) ghostTrailMesh.visible = true;
+  for (const b of bots) if (b.trailMesh) b.trailMesh.visible = true;
+  // clear any old stationary geometry
+  trailPositions.length = 0;
+  trailSegments.length = 0;
+  ghostTrailPositions.length = 0;
+  ghostTrailSegments.length = 0;
+
   lapTimerArmed = false;
   // Start timing the current lap from now
   currentLapStartTime = null;
