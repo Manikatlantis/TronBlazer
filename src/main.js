@@ -113,6 +113,39 @@ function hideIntro() {
   if (!introOverlayEl) return;
   introOverlayEl.classList.remove("visible");
 }
+function isTouchDevice() {
+  return (("ontouchstart" in window) || navigator.maxTouchPoints > 0);
+}
+
+function bindHold(btn, onDown, onUp) {
+  const down = (e) => { e.preventDefault(); onDown(); };
+  const up   = (e) => { e.preventDefault(); onUp(); };
+
+  btn.addEventListener("pointerdown", down);
+  btn.addEventListener("pointerup", up);
+  btn.addEventListener("pointercancel", up);
+  btn.addEventListener("pointerleave", up);
+}
+
+function setupTouchControls() {
+  const wrap = document.getElementById("touchControls");
+  if (!wrap) return;
+
+  if (!isTouchDevice()) {
+    wrap.classList.add("hidden");
+    return;
+  }
+
+  wrap.classList.remove("hidden");
+
+  const left  = document.getElementById("btnLeft");
+  const right = document.getElementById("btnRight");
+  const nitroBtn = document.getElementById("btnNitro");
+
+  bindHold(left,  () => (keys.left = true),  () => (keys.left = false));
+  bindHold(right, () => (keys.right = true), () => (keys.right = false));
+  bindHold(nitroBtn, () => (keys.nitro = true), () => (keys.nitro = false));
+}
 
 // Build 2D segments from your centerline points (XZ plane)
 const trackSegments2D = [];
@@ -230,6 +263,20 @@ window.addEventListener("pointerdown", () => {
     introSeen = true;
     hideIntro();
     showReadyToStartMessage();
+    return;
+  }
+    // Mobile: tap acts like Q when overlays are showing
+  audioMgr?.resumeContextIfNeeded();
+
+  if (gameState === GAME_STATE.WAITING) {
+    audioMgr?.startBgm();
+    enterTutorial();
+  } else if (gameState === GAME_STATE.TUTORIAL) {
+    removeTutorialBooster();
+    startCountdown();
+  } else if (gameState === GAME_STATE.CRASHED) {
+    resetGame();
+    enterTutorial();
   }
 });
 
@@ -881,7 +928,7 @@ function init() {
   hudRecordEl   = document.getElementById("hudRecord");
   hudNitroFillEl = document.getElementById("hudNitroFill");
   hudNitroTextEl = document.getElementById("hudNitroText");
-
+  setupTouchControls();
   initMinimap();
   introOverlayEl = document.getElementById("introOverlay");
   showIntro();               // ✅ first screen
@@ -920,6 +967,12 @@ function init() {
   // Resize
   window.addEventListener("resize", onWindowResize);
 }
+function handleResize() {
+  onWindowResize();
+}
+
+window.addEventListener("resize", handleResize);
+window.visualViewport?.addEventListener("resize", handleResize);
 
 function loadBike() {
   const loader = new GLTFLoader();

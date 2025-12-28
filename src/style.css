@@ -24,6 +24,8 @@ html, body {
   height: 100%;
   overflow: hidden;
   background: #000;
+  overscroll-behavior: none;
+  touch-action: none;
 }
 
 #app {
@@ -483,4 +485,44 @@ button:focus-visible {
   border: 1px solid rgba(0,255,255,0.25);
   background: rgba(0,255,255,0.10);
   box-shadow: 0 0 18px rgba(0,255,255,0.10);
+}
+.touch {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 14px;
+  padding-bottom: calc(14px + env(safe-area-inset-bottom));
+  z-index: 9999;
+  pointer-events: none; /* only buttons receive input */
+}
+
+.touch .tbtn {
+  pointer-events: auto;
+  width: 86px;
+  height: 86px;
+  border-radius: 18px;
+  border: 1px solid rgba(0,255,255,0.25);
+  background: rgba(0,0,0,0.35);
+  color: rgba(235,255,255,0.95);
+  font-size: 26px;
+  font-weight: 800;
+  backdrop-filter: blur(6px);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+  user-select: none;
+}
+
+.touch .tbtn.nitro {
+  width: 120px;
+  height: 86px;
+  font-size: 18px;
+  letter-spacing: 0.06em;
+}
+
+.touch.hidden { display: none; }
+
+@media (hover: hover) and (pointer: fine) {
+  #touchControls { display: none !important; } /* hide on desktop */
 }
