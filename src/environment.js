@@ -15,11 +15,11 @@ export function createEnvironment(scene, renderer) {
   scene.add(group);
 
   // ---------- Stars ----------
-  const stars = makeStarField(2600, 2200);
+  const stars = makeStarField(600, 2200);
   group.add(stars);
 
   // ---------- Sky streaks + meteors ----------
-  const skyStreaks = createSkyStreaks(220);
+  const skyStreaks = createSkyStreaks(80);
   group.add(skyStreaks.lines);
 
   const meteorSystem = createMeteors();
@@ -292,7 +292,7 @@ export function createEnvironment(scene, renderer) {
   }
 
   function update(time, dt, boostPulse = 0.0) {
-    if (stars) stars.rotation.y += dt * 0.01;
+    if (stars) stars.rotation.y += dt * 0.04;
 
     // shader uniforms
     if (tronMat?.uniforms) {
@@ -317,6 +317,7 @@ export function createEnvironment(scene, renderer) {
     // sky streaks + meteors
     skyStreaks.update(time, dt, boostPulse);
     meteorSystem.update(time, dt, boostPulse);
+    stars.position.x = Math.sin(time*0.02)*5;
   }
 
   return {
@@ -422,15 +423,15 @@ function createTronBuildingMaterial() {
         float wobble = 0.5 + 0.5 * sin(uTime * 1.2 + vWorldPos.x * 0.02 + vWorldPos.z * 0.02);
         vec3 wobNeon = mix(neon, mix(uCyan, uMag, wobble), 0.28);
 
-        float flicker = 0.86 + 0.14 * sin(uTime * 13.0 + vWorldPos.x * 0.08 + vWorldPos.z * 0.08);
+        float flicker = 0.86 + 0.34 * sin(uTime * 13.0 + vWorldPos.x * 0.08 + vWorldPos.z * 0.08);
 
         vec3 col = uBase;
 
         col += wobNeon * (
-          fresnel * 2.4 +
-          scan * 0.36 +
-          circuits * 0.48 +
-          windows * 0.70
+          fresnel * 1.45 +
+          scan * 0.22 +
+          circuits * 0.08 +
+          windows * 0.42
         ) * flicker;
 
         col *= (1.0 + uBoost * 0.55);
@@ -460,7 +461,7 @@ function makeStarField(count = 2000, spread = 1200) {
 
   const mat = new THREE.PointsMaterial({
     color: 0x88ccff,
-    size: 1.15,
+    size: 5.15,
     sizeAttenuation: true,
     transparent: true,
     opacity: 0.55,
@@ -493,7 +494,7 @@ function createSkyStreaks(count = 180) {
     ).normalize();
 
     const len = 30 + Math.random() * 140;
-    const spd = 60 + Math.random() * 200;
+    const spd = 60 + Math.random() * 95;
 
     dirs.push(dir);
     speeds.push(spd);
@@ -514,7 +515,7 @@ function createSkyStreaks(count = 180) {
   const mat = new THREE.LineBasicMaterial({
     color: 0x00f5ff,
     transparent: true,
-    opacity: 0.12,
+    opacity: 0.42,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
   });
@@ -524,7 +525,7 @@ function createSkyStreaks(count = 180) {
 
   function update(time, dt, boostPulse) {
     const base = 0.10 + 0.05 * Math.sin(time * 0.7);
-    mat.opacity = THREE.MathUtils.lerp(mat.opacity, base + (boostPulse || 0) * 0.10, 0.08);
+    mat.opacity = THREE.MathUtils.lerp(mat.opacity, base + (boostPulse || 0) * 0.60, 0.08);
 
     // cyan/magenta with tiny red hint
     const mix1 = 0.5 + 0.5 * Math.sin(time * 0.6);
@@ -533,7 +534,7 @@ function createSkyStreaks(count = 180) {
     const cB = new THREE.Color(0xec10ae);
     const cR = new THREE.Color(0xff2a2a);
     mat.color.copy(cA).lerp(cB, mix1 * 0.35).lerp(cR, mix2 * 0.10);
-
+  
     const arr = geo.attributes.position.array;
 
     for (let i = 0; i < count; i++) {
@@ -565,7 +566,6 @@ function createSkyStreaks(count = 180) {
 }
 
 // ---------------- Meteors ----------------
-
 function createMeteors() {
   const group = new THREE.Group();
 
@@ -578,27 +578,25 @@ function createMeteors() {
       new THREE.MeshBasicMaterial({
         color: 0xffffff,
         transparent: true,
-        opacity: 0.75,
+        opacity: 0.80,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       })
     );
     head.frustumCulled = false;
 
-    const trailGeo = new THREE.BufferGeometry();
-    const trailPos = new Float32Array(2 * 3);
-    trailGeo.setAttribute("position", new THREE.BufferAttribute(trailPos, 3));
-
-    // trail tint rotates between cyan/magenta with slight red chance
-    const trailMat = new THREE.LineBasicMaterial({
+    // ----- Thick trail rendered as a mesh (works everywhere; WebGL lines don't) -----
+    const trailGeo = new THREE.CylinderGeometry(1, 1, 1, 10, 1, true);
+    const trailMat = new THREE.MeshBasicMaterial({
       color: 0x00f5ff,
       transparent: true,
-      opacity: 0.35,
+      opacity: 0.22,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
+      side: THREE.DoubleSide,
     });
 
-    const trail = new THREE.Line(trailGeo, trailMat);
+    const trail = new THREE.Mesh(trailGeo, trailMat);
     trail.frustumCulled = false;
 
     const start = new THREE.Vector3(
@@ -613,26 +611,52 @@ function createMeteors() {
       (Math.random() < 0.5 ? -1 : 1) * (0.8 + Math.random() * 1.3)
     ).normalize();
 
-    const speed = 680 + Math.random() * 900;
-    const life = 1.2 + Math.random() * 1.8;
-    const trailLen = 90 + Math.random() * 180;
+    // ✅ speed must be let, because we tweak it for red meteors
+    let speed = 260 + Math.random() * 420;
 
-    // occasional red meteor
-    if (Math.random() < 0.18) {
-      trailMat.color.setHex(0xff2a2a);
-    } else if (Math.random() < 0.45) {
+    // ✅ make them visible longer
+    let life = 1.6 + Math.random() * 2.2;
+
+    // ✅ one trailLen variable only
+    let trailLen = 120 + Math.random() * 220;
+
+    // Decide meteor type once
+    const roll = Math.random();
+    const isRed = roll < 0.12;                 // ~12% red meteors (dramatic but not constant)
+    const isMag = !isRed && roll < 0.34;       // ~22% magenta
+
+    if (isRed) {
+      // BIG fiery asteroid
+      trailMat.color.setHex(0xff3b2f);
+      trailMat.opacity = 0.42;
+
+      // heavier, slower, longer trail
+      speed *= 0.72;
+      life  *= 1.25;
+      trailLen *= 1.35;
+
+      head.scale.setScalar(3.6 + Math.random() * 3.0);
+    } else if (isMag) {
       trailMat.color.setHex(0xec10ae);
+      head.scale.setScalar(1.6 + Math.random() * 1.2);
+    } else {
+      trailMat.color.setHex(0x00f5ff);
+      head.scale.setScalar(1.1 + Math.random() * 0.8);
     }
 
     head.position.copy(start);
     group.add(head);
     group.add(trail);
 
-    meteors.push({ head, trail, dir, speed, life, trailLen });
+    // thickness control
+    const baseRadius = isRed ? (3.2 + Math.random() * 2.8) : (0.55 + Math.random() * 0.9);
+
+    meteors.push({ head, trail, dir, speed, life, trailLen, isRed, baseRadius });
   }
 
   function update(time, dt, boostPulse) {
-    const rate = 0.10 + (boostPulse || 0) * 0.10;
+    // ✅ LOWER spawn rate so nothing "whizzes past" too much
+    const rate = 0.20 + (boostPulse || 0) * 0.12;
     if (Math.random() < dt * rate) spawnMeteor();
 
     for (let i = meteors.length - 1; i >= 0; i--) {
@@ -641,21 +665,39 @@ function createMeteors() {
 
       m.head.position.addScaledVector(m.dir, m.speed * dt);
 
-      const p = m.trail.geometry.attributes.position.array;
-      p[0] = m.head.position.x;
-      p[1] = m.head.position.y;
-      p[2] = m.head.position.z;
+      // Place the trail mesh behind the head, oriented along direction.
+      const headPos = m.head.position;
+      const tailPos = headPos.clone().addScaledVector(m.dir, -m.trailLen);
 
-      p[3] = m.head.position.x - m.dir.x * m.trailLen;
-      p[4] = m.head.position.y - m.dir.y * m.trailLen;
-      p[5] = m.head.position.z - m.dir.z * m.trailLen;
+      // midpoint
+      m.trail.position.copy(headPos).add(tailPos).multiplyScalar(0.5);
 
-      m.trail.geometry.attributes.position.needsUpdate = true;
+      // orient cylinder (Y axis -> dir)
+      const up = new THREE.Vector3(0, 1, 0);
+      const q = new THREE.Quaternion().setFromUnitVectors(up, m.dir);
+      m.trail.quaternion.copy(q);
 
-      const fade = THREE.MathUtils.clamp(m.life / 0.6, 0, 1);
-      m.head.material.opacity = 0.75 * fade;
-      m.trail.material.opacity = 0.35 * fade;
+      // scale: (radius, length, radius)
+      const radius = m.baseRadius * (m.isRed ? 1.0 : 0.65);
+      m.trail.scale.set(radius, m.trailLen * 0.5, radius);
 
+      const fade = THREE.MathUtils.clamp(m.life / 0.9, 0, 1);
+
+      m.head.material.opacity = (m.isRed ? 0.95 : 0.80) * fade;
+      m.trail.material.opacity = (m.isRed ? 0.42 : 0.22) * fade;
+
+      // fiery flicker for red meteors
+      if (m.isRed) {
+        const flick = 0.75 + 0.25 * Math.sin(time * 22.0 + headPos.x * 0.02 + headPos.z * 0.02);
+        m.trail.material.opacity *= flick;
+
+        const hot = 0.5 + 0.5 * Math.sin(time * 8.0);
+        m.trail.material.color
+          .setHex(0xff2a2a)
+          .lerp(new THREE.Color(0xffa23a), hot * 0.45);
+      }
+
+      // kill condition
       if (m.life <= 0 || m.head.position.y < 60) {
         group.remove(m.head);
         group.remove(m.trail);
@@ -670,6 +712,7 @@ function createMeteors() {
 
   return { group, update };
 }
+
 
 // ---------------- Polyline helpers ----------------
 
