@@ -9,7 +9,6 @@ import { getTrackBounds } from "./track_bounds.js";
 import { createAudioManager } from "./audio.js";
 import { createEnvironment } from "./environment.js";
 
-
 let audioMgr;
 let audioStarted = false;
 let wasUsingNitro = false;
@@ -199,6 +198,20 @@ let ghostTimeScale = 0.89; // < 1.0 slows ghost, > 1.0 speeds it up
 let ghostActive = false;
 const GHOST_SAMPLE_INTERVAL = 1 / 60; // seconds between recorded frames
 let lastGhostSampleTime = 0;
+// === COLOR IDENTITY ===
+const PLAYER_COLOR = 0xff5503; // your orange
+const HEAT_PULSE_CORE = 0xff3b00; // hot orange-red
+const HEAT_PULSE_EDGE = 0xff0000; // pure red (strongest at peak)
+
+// === BIKE PULSE (on orb pickup) ===
+const BIKE_PULSE_DURATION = 0.22;  // seconds
+const BIKE_PULSE_COLOR_AMOUNT = 0.55; // how much we blend toward pulse color
+const BIKE_PULSE_EMISSIVE_BOOST = 2.6;
+
+let bikePulseTime = 999; // "inactive" when > duration
+let bikePulseTargets = []; // cached mesh materials on the player
+let trailBaseCore = null;
+let trailBaseEdge = null;
 
 // ---- AI bikes ----
 const bots = [];          // BotBike instances
@@ -967,7 +980,7 @@ function init() {
 
   createStartGate();
   // console.log("Start gate at:", START_GATE_POS);
-
+    
   // Postprocessing – bloom
   const renderScene = new RenderPass(scene, camera);
   const bloomPass = new UnrealBloomPass(
@@ -1019,26 +1032,37 @@ function loadBike() {
       bike.rotation.set(0, SPAWN_ROT_Y, 0);
       scene.add(bike);
       
-            // --- GHOST BIKE SETUP ---
-      ghostBike = bike.clone(true);
+      // --- GHOST BIKE SETUP ---
+ghostBike = bike.clone(true);
+
+      // ghost = same hue as player, just lighter + transparent
+      const ghostCol = makeLighterColor(PLAYER_COLOR, 0.55); // closer to white
+      const ghostEm  = makeLighterColor(PLAYER_COLOR, 0.35);
+
+      ghostBike.scale.multiplyScalar(0.99);
+
       ghostBike.traverse((child) => {
         if (child.isMesh) {
           child.castShadow = false;
           child.receiveShadow = false;
+
           child.material = new THREE.MeshStandardMaterial({
-            color: 0x00ffff,         // cyan
-            emissive: 0x0055ff,
-            emissiveIntensity: 1.5,
+            color: ghostCol,
+            emissive: ghostEm,
+            emissiveIntensity: 1.9,
             transparent: true,
-            opacity: 0.25,
+            opacity: 0.16,                 // translucent
             depthWrite: false,
             blending: THREE.AdditiveBlending,
           });
         }
       });
+
+      ghostBike.userData.mapColor = PLAYER_COLOR; // for minimap
       ghostBike.visible = false;
       scene.add(ghostBike);
       // -------------------------
+
 
       bikeReady = true;
       // ---- BOT BIKE SETUP ----
@@ -1076,6 +1100,7 @@ function loadBike() {
 
       createPlayerTrail();
       createGhostTrail();
+      cacheBikePulseTargets(bike);
     },
     undefined,
     (error) => {
@@ -1272,19 +1297,20 @@ function makeTrailMeshFor(obj, material) {
   const curve = new THREE.CatmullRomCurve3([p0, p1]);
   const geo = new THREE.TubeGeometry(curve, 32, 0.8, 24, false);
   const mesh = new THREE.Mesh(geo, material);
+  
   mesh.scale.set(1.0, 1.8, 1.0);
   scene.add(mesh);
   return mesh;
 }
 
 function createPlayerTrail() {
-  trailMaterial = makeTrailMaterial(0xff5503, 0xff5503, 0.55);
+  trailMaterial = makeTrailMaterial(PLAYER_COLOR, PLAYER_COLOR, 0.55);
   trailMesh = makeTrailMeshFor(bike, trailMaterial);
   trailMesh.visible = false; // ✅ hide until race starts
 }
 
 function createGhostTrail() {
-  ghostTrailMaterial = makeTrailMaterial(0x00ffff, 0x00aaff, 0.35);
+  ghostTrailMaterial = makeTrailMaterial(PLAYER_COLOR, PLAYER_COLOR, 0.28);
   ghostTrailMesh = makeTrailMeshFor(ghostBike, ghostTrailMaterial);
   ghostTrailMesh.visible = false; // ✅
 }
@@ -2206,6 +2232,7 @@ function updateBoosters(dt) {
       audioMgr.playPickup();
       b.active = false;
       b.respawnAt = now + BOOSTER_RESPAWN_SEC;
+      triggerBikePickupPulse();
 
       // hide / fade quickly
       setObjectOpacity(m, 0.0);
@@ -2224,6 +2251,104 @@ function makeUniqueMaterials(obj) {
     }
   });
 }
+function makeLighterColor(hex, t = 0.45) {
+  const c = new THREE.Color(hex);
+  return c.lerp(new THREE.Color(0xffffff), t);
+}
+
+// Cache only once when bike loads
+function cacheBikePulseTargets(playerBike) {
+  bikePulseTargets.length = 0;
+
+  playerBike.traverse((c) => {
+    if (!c.isMesh || !c.material) return;
+
+    const mats = Array.isArray(c.material) ? c.material : [c.material];
+
+    for (const m of mats) {
+      // We only pulse materials that have these properties
+      const hasColor = m.color instanceof THREE.Color;
+      const hasEmissive = m.emissive instanceof THREE.Color;
+
+      if (!hasColor && !hasEmissive) continue;
+
+      bikePulseTargets.push({
+        mat: m,
+        baseColor: hasColor ? m.color.clone() : null,
+        baseEmissive: hasEmissive ? m.emissive.clone() : null,
+        baseEmissiveIntensity: ("emissiveIntensity" in m) ? (m.emissiveIntensity ?? 1.0) : null,
+      });
+    }
+  });
+
+  // also cache trail base colors (so trail can pulse too)
+  if (trailMaterial?.uniforms?.uColorCore?.value) {
+    trailBaseCore = trailMaterial.uniforms.uColorCore.value.clone();
+  }
+  if (trailMaterial?.uniforms?.uColorEdge?.value) {
+    trailBaseEdge = trailMaterial.uniforms.uColorEdge.value.clone();
+  }
+}
+
+function triggerBikePickupPulse() {
+  bikePulseTime = 0;
+}
+
+function applyBikePickupPulse(dt) {
+  if (!bike || bikePulseTime > BIKE_PULSE_DURATION) return;
+
+  bikePulseTime += dt;
+  const x = THREE.MathUtils.clamp(bikePulseTime / BIKE_PULSE_DURATION, 0, 1);
+
+  const heatCore = new THREE.Color(HEAT_PULSE_CORE);
+  const heatEdge = new THREE.Color(HEAT_PULSE_EDGE);
+
+  // nice “flash”: 0 -> 1 -> 0
+  const pulse = Math.sin(Math.PI * x);
+
+  // make it feel like heat ramps fast + cools slower
+  const heat = Math.pow(pulse, 0.65);     // punchy rise
+  const heatEm = Math.pow(pulse, 0.45);   // emissive stays strong
+
+  for (const t of bikePulseTargets) {
+    const m = t.mat;
+
+    if (t.baseColor && m.color) {
+      m.color.copy(t.baseColor).lerp(heatCore, BIKE_PULSE_COLOR_AMOUNT * heat);
+    }
+    if (t.baseEmissive && m.emissive) {
+      // emissive follows the pulse color too
+      m.emissive.copy(t.baseEmissive).lerp(heatEdge, 0.85 * heatEm);
+    }
+    if (t.baseEmissiveIntensity != null && "emissiveIntensity" in m) {
+      m.emissiveIntensity = t.baseEmissiveIntensity + BIKE_PULSE_EMISSIVE_BOOST * heatEm;
+    }
+  }
+
+  // OPTIONAL: make trail pulse too (feels amazing with bloom)
+  if (trailMaterial?.uniforms?.uColorCore?.value && trailBaseCore) {
+    // core stays orange-ish, just hotter
+    trailMaterial.uniforms.uColorCore.value.copy(trailBaseCore).lerp(heatCore, 0.55 * heat);
+  }
+  if (trailMaterial?.uniforms?.uColorEdge?.value && trailBaseEdge) {
+    // edges go red-hot
+    trailMaterial.uniforms.uColorEdge.value.copy(trailBaseEdge).lerp(heatEdge, 0.75 * heat);
+  }
+
+
+  // restore at the end (prevents drift)
+  if (x >= 1) {
+    for (const t of bikePulseTargets) {
+      const m = t.mat;
+      if (t.baseColor && m.color) m.color.copy(t.baseColor);
+      if (t.baseEmissive && m.emissive) m.emissive.copy(t.baseEmissive);
+      if (t.baseEmissiveIntensity != null && "emissiveIntensity" in m) m.emissiveIntensity = t.baseEmissiveIntensity;
+    }
+    if (trailMaterial?.uniforms?.uColorCore?.value && trailBaseCore) trailMaterial.uniforms.uColorCore.value.copy(trailBaseCore);
+    if (trailMaterial?.uniforms?.uColorEdge?.value && trailBaseEdge) trailMaterial.uniforms.uColorEdge.value.copy(trailBaseEdge);
+  }
+}
+
 
 function trySpawnBots() {
   if (botsSpawned) return;
@@ -2299,7 +2424,7 @@ function animate() {
 
       countdownSprite.scale.set(
         countdownSpriteBaseScale * pulse,
-        countdownSpriteBaseScale * 0.5 * pulse,
+        countdownSpriteBaseScale * 0.7 * pulse,
         1
       );
 
@@ -2495,6 +2620,7 @@ function animate() {
     if (DEBUG_FREE_CAMERA && controls) controls.update();
   }
   updateHUD(rawDt);
+  applyBikePickupPulse(rawDt);
   updateMinimap();
   
   const boostPulse = (keys.nitro && nitro > 0 && gameState === GAME_STATE.PLAYING) ? 0.7 : 0.0;
