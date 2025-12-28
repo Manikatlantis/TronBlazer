@@ -265,7 +265,7 @@ window.addEventListener("keydown", (e) => {
   }
 
   // Start / restart with Q
-  if (e.code === "KeyQ") {
+  if (e.code === "Space") {
      audioMgr?.resumeContextIfNeeded();
   
   if (gameState === GAME_STATE.WAITING) {
@@ -1935,7 +1935,7 @@ function showReadyToStartMessage() {
   crashSubtitleEl.innerHTML = `
     <div class="overlay-stack">
       <div class="overlay-primary">
-        Press <span class="key">Q</span> to start
+        Press <span class="key">SPACE</span> to start
       </div>
 
       <div class="overlay-divider"></div>
@@ -1971,7 +1971,7 @@ function showBoosterTutorialMessage() {
   crashSubtitleEl.innerHTML =
     `Collect this orb to fill your <b>Nitro</b> bar.<br>` +
     `Hold <span class="key">Shift</span> to boost speed while Nitro &gt; 0.<br><br>` +
-    `Press <span class="key">Q</span> to begin`;
+    `Press <span class="key">SPACE</span> to begin`;
 
   showOverlay();
 }
