@@ -520,6 +520,26 @@ if (ghostBike && ghostBike.visible) {
   ctx.fill();
 }
 
+// Bots
+if (botsSpawned && bots.length) {
+  for (const bot of bots) {
+    if (!bot?.mesh) continue;
+
+    const bp = worldToMinimapXZ(bot.mesh.position.x, bot.mesh.position.z);
+    const bAng = getHeadingAngleFromObject(bot.mesh);
+
+    const hex = bot.mesh.userData.mapColor ?? 0x00ffff;
+    ctx.fillStyle = `rgba(${(hex>>16)&255}, ${(hex>>8)&255}, ${hex&255}, 0.90)`;
+    drawArrow(ctx, bp.x, bp.y, bAng, 6);
+
+    // dot
+    ctx.fillStyle = "rgba(255,255,255,0.35)";
+    ctx.beginPath();
+    ctx.arc(bp.x, bp.y, 2.0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 // Player
 if (bike) {
   const bp = worldToMinimapXZ(bike.position.x, bike.position.z);
