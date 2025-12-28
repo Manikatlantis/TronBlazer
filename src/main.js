@@ -33,7 +33,7 @@ let keys = { left: false, right: false, nitro: false};
 let crashMessageEl = null;
 let crashTitleEl = null;
 let crashSubtitleEl = null;
-let forwardSpeed = 340;
+let forwardSpeed = 360;
 let lastGateSide = null;
 let countdownStep = -1;
 let countdownTimer = 0;
@@ -67,7 +67,8 @@ const boosters = []; // { pos: Vector3, mesh: Object3D, active: bool, respawnAt:
 let hudNitroFillEl, hudNitroTextEl;
 // === MINIMAP ===
 let minimapCanvas, minimapCtx;
-const MINIMAP_SIZE = 150;     // CSS px
+const IS_MOBILE = matchMedia("(hover: none) and (pointer: coarse)").matches;
+const MINIMAP_SIZE = IS_MOBILE ? 125 : 150;
 const MINIMAP_PAD = 14;       // inner padding
 let minimapBounds = { minX: 0, maxX: 1, minZ: 0, maxZ: 1 };
 let minimapTrackCache = [];   // cached screen-space polyline points
@@ -115,16 +116,6 @@ function hideIntro() {
 }
 function isTouchDevice() {
   return (("ontouchstart" in window) || navigator.maxTouchPoints > 0);
-}
-
-function bindHold(btn, onDown, onUp) {
-  const down = (e) => { e.preventDefault(); onDown(); };
-  const up   = (e) => { e.preventDefault(); onUp(); };
-
-  btn.addEventListener("pointerdown", down);
-  btn.addEventListener("pointerup", up);
-  btn.addEventListener("pointercancel", up);
-  btn.addEventListener("pointerleave", up);
 }
 
 function setupTouchControls() {
@@ -349,6 +340,32 @@ window.addEventListener("keyup", (e) => {
   if (e.code === "ShiftLeft" || e.code === "ShiftRight") keys.nitro = false;
 
 });
+
+function killContextMenu(el) {
+  if (!el) return;
+  el.addEventListener("contextmenu", (e) => e.preventDefault());
+  el.addEventListener("selectstart", (e) => e.preventDefault());
+}
+
+function bindHold(btn, onDown, onUp) {
+  const down = (e) => {
+    e.preventDefault();
+    btn.setPointerCapture?.(e.pointerId);   // keep “hold” on this button
+    onDown();
+  };
+  const up = (e) => { e.preventDefault(); onUp(); };
+
+  btn.addEventListener("pointerdown", down);
+  btn.addEventListener("pointerup", up);
+  btn.addEventListener("pointercancel", up);
+  btn.addEventListener("pointerleave", up);
+
+  // iOS extra safety (some versions still trigger selection without this)
+  btn.addEventListener("touchstart", (e) => e.preventDefault(), { passive: false });
+  btn.addEventListener("touchend",   (e) => e.preventDefault(), { passive: false });
+
+  killContextMenu(btn);
+}
 
 init();
 animate();
@@ -1988,7 +2005,7 @@ function showReadyToStartMessage() {
   crashSubtitleEl.innerHTML = `
     <div class="overlay-stack">
       <div class="overlay-primary">
-        Press <span class="key">SPACE</span> to start
+        Press <span class="key">SPACE</span> or <span class="key">CLICK</span> to start
       </div>
 
       <div class="overlay-divider"></div>
@@ -2024,7 +2041,7 @@ function showBoosterTutorialMessage() {
   crashSubtitleEl.innerHTML =
     `Collect this orb to fill your <b>Nitro</b> bar.<br>` +
     `Hold <span class="key">Shift</span> to boost speed while Nitro &gt; 0.<br><br>` +
-    `Press <span class="key">SPACE</span> to begin`;
+    `Press <span class="key">SPACE</span> or <span class="key">CLICK</span> to begin`;
 
   showOverlay();
 }

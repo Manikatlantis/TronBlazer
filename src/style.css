@@ -352,17 +352,33 @@ button:focus-visible {
 
 #minimap {
   position: fixed;
-  right: 16px;
-  top: 16px;
+  right: 12px;
+  top: calc(env(safe-area-inset-top) + 12px);
   width: 150px;
   height: 150px;
-  z-index: 30;
+  z-index: 9998;
   pointer-events: none;
   border-radius: 14px;
   border: 1px solid rgba(0,255,255,0.25);
   background: rgba(0,0,0,0.28);
   box-shadow: 0 0 18px rgba(0,255,255,0.12);
   backdrop-filter: blur(10px);
+}
+/* Reserve room so left HUD never collides with minimap */
+#hud, .hud, #hudLeft {
+  position: fixed;
+  top: calc(env(safe-area-inset-top) + 12px);
+  left: 12px;
+  z-index: 9998;
+  max-width: calc(100vw - 12px - 150px - 12px - 12px); /* screen - minimap - margins */
+  pointer-events: none;
+}
+
+@media (max-width: 420px) {
+  /* Smaller phones: reserve less by shrinking minimap via JS or just reserve ~125 */
+  #hud, .hud, #hudLeft {
+    max-width: calc(100vw - 12px - 125px - 12px - 12px);
+  }
 }
 .intro {
   position: fixed;
@@ -525,4 +541,20 @@ button:focus-visible {
 
 @media (hover: hover) and (pointer: fine) {
   #touchControls { display: none !important; } /* hide on desktop */
+}
+
+/* Disable iOS text selection + callouts everywhere */
+html, body, #app, canvas, * {
+  -webkit-touch-callout: none;   /* iOS: disables copy/lookup menu */
+  -webkit-user-select: none;     /* iOS: disables selection */
+  user-select: none;
+  -webkit-user-drag: none;
+  touch-action: none;            /* prevent browser gestures */
+}
+
+.touch .tbtn {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
 }
