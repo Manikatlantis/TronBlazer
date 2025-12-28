@@ -383,6 +383,75 @@ function bindHold(btn, onDown, onUp) {
 init();
 animate();
 
+// === BOOSTER NEON PULSE (match tower vibe) ===
+const BOOSTER_PULSE_COLORS = [0x00f5ff, 0xec10ae, 0x580dc2]; // cyan, magenta, purple
+const BOOSTER_COLOR_PULSE_SPEED = 2.2; // color cycling speed
+const BOOSTER_GLOW_BASE = 1.6;         // emissive base
+const BOOSTER_GLOW_PULSE = 2.8;        // emissive pulse amount
+
+function colorFromPalette3(t, c0, c1, c2) {
+  // t: 0..1
+  const a = new THREE.Color(c0);
+  const b = new THREE.Color(c1);
+  const c = new THREE.Color(c2);
+
+  if (t < 0.5) return a.lerp(b, t * 2.0);
+  return b.lerp(c, (t - 0.5) * 2.0);
+}
+
+function ensureGlowMaterial(mat) {
+  // If it's already Standard/Physical, keep it.
+  if (mat && (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial)) return mat;
+
+  // Convert (MeshBasic/Lambert/etc.) to MeshStandard so emissive works + bloom looks good.
+  const m = new THREE.MeshStandardMaterial({
+    map: mat?.map ?? null,
+    transparent: mat?.transparent ?? true,
+    opacity: mat?.opacity ?? 1.0,
+    depthWrite: mat?.depthWrite ?? true,
+    depthTest: mat?.depthTest ?? true,
+    roughness: 0.25,
+    metalness: 0.0,
+    color: mat?.color ? mat.color.clone() : new THREE.Color(0xffffff),
+    emissive: new THREE.Color(0x000000),
+    emissiveIntensity: 1.0,
+  });
+
+  // preserve alpha map if present
+  if (mat?.alphaMap) m.alphaMap = mat.alphaMap;
+  return m;
+}
+
+function initBoosterPulse(mesh) {
+  // cache all target materials once so update is cheap
+  const mats = [];
+
+  mesh.traverse((c) => {
+    if (!c.isMesh || !c.material) return;
+
+    if (Array.isArray(c.material)) {
+      c.material = c.material.map((m) => ensureGlowMaterial(m));
+    } else {
+      c.material = ensureGlowMaterial(c.material);
+    }
+
+    const arr = Array.isArray(c.material) ? c.material : [c.material];
+    for (const m of arr) {
+      if (!m) continue;
+
+      // make sure emissive exists
+      if (!("emissive" in m)) continue;
+
+      mats.push(m);
+    }
+  });
+
+  // store per-mesh pulse params
+  mesh.userData.boosterMats = mats;
+  mesh.userData.colorPulseSpeed = BOOSTER_COLOR_PULSE_SPEED + Math.random() * 0.9;
+  mesh.userData.colorPulseOffset = Math.random() * Math.PI * 2;
+}
+
 function initGateFromPoints() {
   gateMinX = Infinity;
   gateMaxX = -Infinity;
@@ -2180,6 +2249,7 @@ function spawnBoostersRandomly() {
     mesh.userData.pulseSpeed = 5.0;                // pulse frequency
     mesh.userData.spinSpeed = 2.2;                 // radians/sec
     mesh.userData.pulseOffset = Math.random() * Math.PI * 2;
+    initBoosterPulse(mesh);
     // mesh.rotation.set(0, yaw, 0);
 
     scene.add(mesh);
@@ -2206,6 +2276,27 @@ function updateBoosters(dt) {
     // Visual animation (spin + pulse)
     const m = b.mesh;
     if (b.active && m.visible) {
+      // === NEW: tower-like neon color + emissive pulse ===
+      const mats = m.userData.boosterMats;
+      if (mats && mats.length) {
+        const off = m.userData.colorPulseOffset ?? 0.0;
+        const spd = m.userData.colorPulseSpeed ?? BOOSTER_COLOR_PULSE_SPEED;
+
+        // 0..1 color cycle
+        const u = 0.5 + 0.5 * Math.sin(now * spd + off);
+        const col = colorFromPalette3(u, ...BOOSTER_PULSE_COLORS);
+
+        // emissive pulse (stronger at peak)
+        const glow = BOOSTER_GLOW_BASE + BOOSTER_GLOW_PULSE * (0.5 + 0.5 * Math.sin(now * (spd * 1.25) + off));
+
+        for (const mat of mats) {
+          mat.color.copy(col);
+          mat.emissive.copy(col);
+          mat.emissiveIntensity = glow;
+          mat.needsUpdate = true;
+        }
+      }
+
       m.rotation.y += (m.userData.spinSpeed ?? 2.0) * dt;
 
       const base = m.userData.baseScale ?? m.scale.x;
