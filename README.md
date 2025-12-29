@@ -4,7 +4,7 @@
 ***TronBlazer*** is a neon time-trial racer inspired by the **TRON lightcycle** scenes - built with **Three.js**, custom **GLSL shaders**, post-processing **bloom**, a lap + gate system, **ghost replay**, **Nitro Orbs**, **AI riders**, trail collisions, and crash feedback with **explosions**.
 
 ## **Play Here -** https://manikdmaniac.itch.io/tronblazer
-### ** You can also Play Here -** https://manikatlantis.github.io/TronBlazer/
+### **You can also Play Here -** https://manikatlantis.github.io/TronBlazer/
 > I used AI tooling during development, but the project architecture, gameplay systems, and implementation decisions are my own.
 ---
 
