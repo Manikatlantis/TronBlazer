@@ -32,7 +32,7 @@ I also cut a short intro video using the phonk track **"Estou Livre"** that I us
 | **A** or **←** | Turn left |
 | **D** or **→** | Turn right |
 | **Shift (hold)** | Boost (consumes Nitro while Nitro > 0) |
-| **Q** | Start countdown / restart after crash |
+| **SPACE** | Start countdown / restart after crash |
 | **R** | Reset to spawn and go back to Ready |
 | **V** | Toggle Chase vs Cinematic camera |
 | **C** | Toggle free OrbitControls debug camera |
