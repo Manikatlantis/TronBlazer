@@ -13,6 +13,13 @@ I also cut a short intro video using the phonk track **"Estou Livre"** that I us
 
 ---
 
+![tron1](tron1.png)
+![tron2](tron2.png)
+![tron3](tron3.png)
+![tron4](tron4.png)
+![tron5](tron5.png)
+
+---
 ## 🚀 Core Gameplay
 - **Neon lightcycle** with hover + lean for an arcade feel  
 - **Constant forward motion** with smooth turning (tight but controllable)  
