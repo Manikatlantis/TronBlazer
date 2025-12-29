@@ -308,6 +308,5 @@ The arena, bike, and orb 3D models were downloaded from **Sketchfab** and are cr
 - Add an in-game settings/menu (graphics/audio/controls)
 - Add track selection + multiple arenas
 - Improve AI variety (difficulty scaling, tactics, avoidance)
-- Add touch/mobile controls
 - Add more crash VFX polish (camera shake, sparks, slow-mo)
 - Add a shareable lap replay export format (record + playback)
