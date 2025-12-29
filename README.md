@@ -293,9 +293,18 @@ npm run preview
 ├── package-lock.json
 ├── README.md
 ├── credits.txt
-
+```
+Expected model paths (update if you move assets)
+``` js
+loader.load("/models/lightcycle.glb", ...)
+loader.load("/models/arena2/scene.gltf", ...)
 
 ```
+
+
+
+
+
 
 
 ## Core gameplay
