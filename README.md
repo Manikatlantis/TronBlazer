@@ -8,7 +8,7 @@
 ---
 
 ## 🎥 Demo
-I also cut a short intro video using the phonk track **"Estou Livre"** that I use when presenting the project.
+I also cut a short intro video using the phonk track **"Estou Livre"** that I use when presenting the project for my CS460 Class at UMass Boston. This is one of the older versions at the time - https://vimeo.com/1144625468
 
 ---
 
