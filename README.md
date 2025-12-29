@@ -5,6 +5,12 @@
 
 ## **Play Here -** https://manikatlantis.github.io/TronBlazer/
 > I used AI tooling during development, but the project architecture, gameplay systems, and implementation decisions are my own.
+---
+
+## 🎥 Demo
+I also cut a short intro video using the phonk track **"Estou Livre"** that I use when presenting the project.
+
+---
 
 Repo
 ```bash
