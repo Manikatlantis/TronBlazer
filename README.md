@@ -81,8 +81,8 @@ Every frame (while `PLAYING`):
 - hover uses a small sine offset in Y for floating
 
 Useful knobs:
-- `forwardSpeed` — overall pace  
-- `TURN_SPEED` — steering strength  
+- `forwardSpeed` - overall pace  
+- `TURN_SPEED` - steering strength  
 - `MAX_LEAN` + `LEAN_SMOOTH` — corner feel  
 
 ---
@@ -111,7 +111,7 @@ Common uniforms include:
 ---
 
 ### 5) Trail Collisions
-The trail is not just visual — it becomes gameplay:
+The trail is not just visual, it becomes gameplay:
 - colliding with your own trail counts as a crash / damage event
 - bots’ trails can also be hazards depending on mode
 - trail collision checks are done by comparing the bike position against the trail representation (sampled segments / radius checks)
@@ -206,6 +206,60 @@ const GHOST_THEMES = {
   orange: { body: 0xff6b00, edge: 0xffb066 },
   iceBlue:{ body: 0x66ccff, edge: 0xccf3ff },
 };
+
+---
+
+## 12) Cameras (Chase + Cinematic + Debug)
+
+### **Chase camera**
+- Classic behind-and-above view
+- Uses a bike-local offset transformed into world space
+- Smoothed every frame using **lerp** so motion feels stable and “game-like”
+
+### **Cinematic camera**
+- Orbits around the **front side** of the bike for dramatic shots
+- Slowly varies **radius**, **height**, and **FOV** over time (soft dolly/crane feel)
+- Still aims slightly ahead of the bike to keep framing consistent
+
+### **Debug camera**
+- Free camera for tuning/testing
+- Uses **OrbitControls** so you can rotate/zoom around the bike
+
+**Toggle keys**
+- Press `V` to switch **Chase ↔ Cinematic**
+- Press `C` to enable/disable **free OrbitControls debug camera**
+
+---
+
+## 13) Post Processing (Neon Look)
+
+The neon look is created using a post-processing pipeline:
+- **EffectComposer**
+- **RenderPass**
+- **UnrealBloomPass**
+- Filmic tone mapping + correct output encoding (**sRGB**)
+
+---
+
+## 🏗 Requirements
+- **Node.js 18+**
+- **npm** or **yarn**
+- Modern browser with **WebGL** support
+
+---
+
+## 🧪 Getting Started (Local)
+
+Clone + install:
+```bash
+git clone https://github.com/Manikatlantis/TronBlazer.git
+cd TronBlazer
+npm install
+npm run dev
+
+
+
+
 
 Repo
 ```bash
