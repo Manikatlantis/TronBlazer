@@ -62,6 +62,151 @@ After load:
 
 ---
 
+### 2) Track + Lane Constraints
+The track centerline is defined in `tracks.js` as an array of `[x, z]` points.  
+Those points are converted into `THREE.Vector2` and cached in `trackPoints`.  
+From there, segment lengths + helpers are precomputed so the game can:
+- sample points along the track (for orb spawns and tuning)
+- compute “closest point on track” corrections
+- constrain movement inside a `TRACK_HALF_WIDTH` corridor with a soft “push back / bounce” feel
+
+---
+
+### 3) Bike Movement (Hover + Lean + Smooth Steering)
+Every frame (while `PLAYING`):
+- forward direction is derived from the bike’s quaternion
+- forward movement is applied: `pos += forwardDir * forwardSpeed * dt`
+- turning applies yaw changes: `rotation.y += turnDir * TURN_SPEED * dt`
+- roll/lean is applied on the Z axis based on input using smoothing (arcade lean)
+- hover uses a small sine offset in Y for floating
+
+Useful knobs:
+- `forwardSpeed` — overall pace  
+- `TURN_SPEED` — steering strength  
+- `MAX_LEAN` + `LEAN_SMOOTH` — corner feel  
+
+---
+
+### 4) TRON Trail (TubeGeometry + GLSL Shader)
+This is the signature system.
+
+**Geometry**
+- The trail samples bike positions over time.
+- A smooth curve is built (commonly via `CatmullRomCurve3`).
+- The visible trail is generated using **`THREE.TubeGeometry`** along that curve.
+
+**Shader (GLSL)**
+The trail uses a `ShaderMaterial` with animated energy flow:
+- **Fresnel glow** so edges are hotter at grazing angles  
+- **UV warping** so energy “moves” through the tube  
+- **Core/edge band masks** for a layered neon look  
+- **Age-based fade** so older trail segments become transparent  
+
+Common uniforms include:
+- `uTime` (animation)
+- `uColorCore` / `uColorEdge` (palette)
+- `uOpacity`
+- `uFadePower` (tail fade behavior)
+
+---
+
+### 5) Trail Collisions
+The trail is not just visual — it becomes gameplay:
+- colliding with your own trail counts as a crash / damage event
+- bots’ trails can also be hazards depending on mode
+- trail collision checks are done by comparing the bike position against the trail representation (sampled segments / radius checks)
+
+---
+
+### 6) HP (Health) + Damage
+The game tracks HP continuously:
+- collisions (trail / walls / riders) reduce HP
+- HUD reflects current HP status
+- when HP hits `0`, the game transitions into the crash flow (overlay + explosion + restart options)
+
+---
+
+### 7) Nitro Orbs (Collectibles + Boost)
+Nitro Orbs:
+- are spawned along the track by sampling random positions along track length
+- use emissive neon + animation (spin + pulse)
+- refill the Nitro bar when collected
+
+Boost:
+- hold **Shift** to boost speed while `Nitro > 0`
+- Nitro drains during boost and stops when empty or on release
+
+> The orb model is downloaded and credited in `credits.txt`.
+
+---
+
+### 8) AI Riders (Bots)
+AI bikes (“bots”) roam the arena to add pressure:
+- they follow a track-based strategy (centerline following + steering corrections)
+- their movement is tuned to feel like riders in the same world (not random cubes)
+- they create additional collision risk and increase difficulty through positioning and timing
+
+---
+
+### 9) Crash Feedback (Explosion + UI)
+When a crash occurs (trail hit / HP reaches zero / major collision):
+- gameplay transitions to `CRASHED`
+- a crash overlay appears with restart instructions
+- an **explosion effect** triggers near the bike (flash/particles/bloom pop depending on implementation)
+- user can restart/reset using the controls displayed in the overlay
+
+---
+
+### 10) Start Gate + Lap Timing
+The start gate is defined using measured world-space points:
+- `GATE_POINTS` define a rectangle range
+- a plane is defined using `(gatePlanePoint, gatePlaneNormal)`
+- crossing is detected when the sign of `(bikePos - gatePlanePoint) · gatePlaneNormal` flips
+- direction validation uses a dot check between bike forward direction and `START_FORWARD_DIR`
+
+Lap timing:
+- valid crossings finalize lap time
+- laps shorter than `MIN_VALID_LAP_TIME` are ignored to prevent tiny-loop exploits
+- best lap is stored and displayed on HUD
+
+---
+
+### 11) Ghost Replay (Record + Playback + Ghost Trail)
+Ghost replay records your **best lap** and replays it on future laps.
+
+**Recording**
+During a lap, the game samples frames every `GHOST_SAMPLE_INTERVAL`:
+- time `t`
+- position `pos`
+- yaw rotation `rotY`
+
+**Saving**
+When a lap becomes a new record:
+- the sampled frames are deep-copied into the “best ghost”
+- HUD shows a **New Record** flash
+
+**Playback**
+During future laps:
+- ghost time `ghostT` comes from current lap timer
+- the game finds the two ghost frames surrounding `ghostT`
+- position + rotation are interpolated for smooth replay
+
+**Ghost trail**
+- best ghost positions are converted into a curve
+- a separate **TubeGeometry** trail is generated
+- a theme map controls ghost colors
+
+Example theme map:
+```js
+const GHOST_THEMES = {
+  cyan:   { body: 0x00ffff, edge: 0x00ffff },
+  magenta:{ body: 0xff00ff, edge: 0xff66ff },
+  gold:   { body: 0xffd54f, edge: 0xfff3c0 },
+  lime:   { body: 0xa6ff00, edge: 0xe1ff66 },
+  orange: { body: 0xff6b00, edge: 0xffb066 },
+  iceBlue:{ body: 0x66ccff, edge: 0xccf3ff },
+};
+
 Repo
 ```bash
 git clone https://github.com/Manikatlantis/TronBlazer.git
