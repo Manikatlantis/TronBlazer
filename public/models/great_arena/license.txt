@@ -1,0 +1,8 @@
+Model Information:
+* title:	Lightcycle Arena Rev 02 | TE:BG
+* source:	https://sketchfab.com/3d-models/lightcycle-arena-rev-02-tebg-4f52ab3038a94557a3b69e899297b945
+* author:	Shriker1 (https://sketchfab.com/Shriker1)
+
+Model License:
+* license type:	SKETCHFAB Standard (https://sketchfab.com/licenses)
+* requirements:	Under basic restrictions, use worldwide, on all types of media, commercially or not, and in all types of derivative works
