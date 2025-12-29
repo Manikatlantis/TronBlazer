@@ -90,7 +90,7 @@ const trackPoints = currentTrack.points.map(
 );
 
 let trailMaterial, trailMesh;  // For the tron trail
-const MAX_TRAIL_POINTS = 50;
+const MAX_TRAIL_POINTS = 25;
 const trailPositions = [];
 
 const GAME_STATE = {
