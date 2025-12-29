@@ -256,16 +256,18 @@ git clone https://github.com/Manikatlantis/TronBlazer.git
 cd TronBlazer
 npm install
 npm run dev
-
-
-
-
-
-Repo
-```bash
-git clone https://github.com/Manikatlantis/TronBlazer.git
-cd TronBlazer
 ```
+Open the local URL printed by Vite (usually http://localhost:5173), then press Q to start.
+
+Build:
+```bash
+npm run build
+npm run preview
+```
+
+
+
+
 ## Core gameplay
 
 - Neon lightcycle with hover and lean
