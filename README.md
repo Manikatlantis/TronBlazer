@@ -16,7 +16,7 @@ I also cut a short intro video using the phonk track **"Estou Livre"** that I us
 - **Neon lightcycle** with hover + lean for an arcade feel  
 - **Constant forward motion** with smooth turning (tight but controllable)  
 - **TRON trail system** that grows behind the bike and becomes a hazard  
-- **HP (health) system** — collisions reduce HP, and reaching zero triggers a crash flow  
+- **HP (Health Points)** — collisions reduce HP, and reaching zero triggers a crash flow  
 - **Nitro Orbs** to refill boost meter + **Shift** boost for speed bursts  
 - **AI riders** (bots) that move in the arena and add pressure + trail threats  
 - **Lap system** with a measured gate, direction validation, and minimum lap time protection  
