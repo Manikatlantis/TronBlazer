@@ -577,3 +577,7 @@ html, body, #app, canvas, * {
   100% { opacity: 0; }
 }
 
+.control-keys.wrap {
+  gap: 10px;
+  flex-wrap: wrap;
+}

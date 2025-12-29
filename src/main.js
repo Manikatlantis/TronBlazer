@@ -2277,6 +2277,14 @@ function showReadyToStartMessage() {
           </div>
         </div>
       </div>
+      <div class="control-keys wrap">
+          <div class="control-label">Survival</div>
+          <div class="control-keys" style="gap:10px; flex-wrap:wrap;">
+            <span class="control-text">Avoid <b>trails</b> — touching drains <b>HP</b></span>
+            <span class="dot">•</span>
+            <span class="control-text">If <b>HP</b> hits <b>0</b>, you <b>crash</b></span>
+          </div>
+        </div>
     </div>
   `;
 
@@ -2289,11 +2297,16 @@ function showBoosterTutorialMessage() {
   crashTitleEl.textContent = "Nitro Orbs";
   crashSubtitleEl.innerHTML =
     `Collect this orb to fill your <b>Nitro</b> bar.<br>` +
-    `Hold <span class="key">Shift</span> to boost speed while Nitro &gt; 0.<br><br>` +
+    `Hold <span class="key">Shift</span> to boost speed while Nitro &gt; 0.<br>` +
+    `<br>` +
+    `<b>Survival:</b> Avoid <b>trails</b> — touching them drains <b>HP</b>.<br>` +
+    `Watch your <b>HP</b>. If it hits <b>0</b>, you <b>crash</b>.<br>` +
+    `<br>` +
     `Press <span class="key">SPACE</span> or <span class="key">CLICK</span> to begin`;
 
   showOverlay();
 }
+
 const TUTORIAL_ORB_SIDE = "right"; // "left" or "right"
 function createTutorialBooster() {
   removeTutorialBooster();
