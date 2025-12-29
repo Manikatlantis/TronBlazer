@@ -12,6 +12,56 @@ I also cut a short intro video using the phonk track **"Estou Livre"** that I us
 
 ---
 
+## 🚀 Core Gameplay
+- **Neon lightcycle** with hover + lean for an arcade feel  
+- **Constant forward motion** with smooth turning (tight but controllable)  
+- **TRON trail system** that grows behind the bike and becomes a hazard  
+- **HP (health) system** — collisions reduce HP, and reaching zero triggers a crash flow  
+- **Nitro Orbs** to refill boost meter + **Shift** boost for speed bursts  
+- **AI riders** (bots) that move in the arena and add pressure + trail threats  
+- **Lap system** with a measured gate, direction validation, and minimum lap time protection  
+- **Ghost replay** that records your best lap and replays it as a neon ghost bike  
+- **Explosion** and crash overlay feedback (restart/reset loop)
+
+---
+
+## 🕹 Controls
+
+| Key | Action |
+|---|---|
+| **A** or **←** | Turn left |
+| **D** or **→** | Turn right |
+| **Shift (hold)** | Boost (consumes Nitro while Nitro > 0) |
+| **Q** | Start countdown / restart after crash |
+| **R** | Reset to spawn and go back to Ready |
+| **V** | Toggle Chase vs Cinematic camera |
+| **C** | Toggle free OrbitControls debug camera |
+| **P** | Log bike position to console (debug) |
+
+---
+
+## 🎮 Game States
+- **Ready**: bike at spawn, overlay shows start instructions  
+- **Countdown**: 3 / 2 / 1 / GO appears near the gate  
+- **Playing**: movement, laps, trails, orbs, bots, HP all active  
+- **Crashed**: overlay prompts restart/reset (and crash VFX triggers)
+
+---
+
+
+## 🧩 How It Works (Systems + Implementation)
+
+### 1) Arena + World Bounds (GLTF)
+The arena is loaded using `GLTFLoader` from a downloaded model (credited in `credits.txt`).  
+After load:
+- the arena is scaled/positioned so the floor sits near `y = 0`
+- a `THREE.Box3` is computed around the arena
+- the XZ half-sizes are used to keep the bike inside the playable area via a simple wall collision check
+
+> This makes the arena constraints resilient even if the model scale changes.
+
+---
+
 Repo
 ```bash
 git clone https://github.com/Manikatlantis/TronBlazer.git
