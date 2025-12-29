@@ -268,22 +268,33 @@ npm run preview
 ## Project Structure
 ```bash
 .
+├── node_modules
+├── public
+│   └── models
+│       ├── arena2
+│       ├── lightcycle.glb
+│       ├── energy_flash.glb
+│       └── ... (other unused .glb files)
+│   └── audio
+│       ├── tron_bgm.mp3
+│       ├── ... (Other audio files)
+├── src
+│   └── audio.js
+│   └── counter.js
+│   └── environment.js
+│   └── main.js
+│   └── style.css
+│   └── track_bounds.js
+│   └── tracks.js
+├── .gitignore
+├── package.json
 ├── index.html
 ├── package.json
 ├── package-lock.json
 ├── README.md
 ├── credits.txt
-├── public
-│   └── models
-│       ├── lightcycle.glb
-│       ├── arena2
-│       │   └── scene.gltf
-│       └── orb.glb (or similar)
-└── src
-    ├── main.js
-    ├── tracks.js
-    ├── style.css
-    └── ...
+
+
 ```
 
 
