@@ -206,7 +206,7 @@ const GHOST_THEMES = {
   orange: { body: 0xff6b00, edge: 0xffb066 },
   iceBlue:{ body: 0x66ccff, edge: 0xccf3ff },
 };
-
+```
 ---
 
 ## 12) Cameras (Chase + Cinematic + Debug)
