@@ -271,10 +271,10 @@ npm run preview
 ├── node_modules
 ├── public
 │   └── models
-│       ├── arena2
-│       ├── lightcycle.glb
-│       ├── energy_flash.glb
-│       └── ... (other unused .glb files)
+│   |   ├── arena2
+│   |   ├── lightcycle.glb
+│   |   ├── energy_flash.glb
+│   |   └── ... (other unused .glb files)
 │   └── audio
 │       ├── tron_bgm.mp3
 │       ├── ... (Other audio files)
