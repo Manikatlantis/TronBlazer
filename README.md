@@ -265,7 +265,26 @@ npm run build
 npm run preview
 ```
 
-
+## Project Structure
+```bash
+.
+├── index.html
+├── package.json
+├── package-lock.json
+├── README.md
+├── credits.txt
+├── public
+│   └── models
+│       ├── lightcycle.glb
+│       ├── arena2
+│       │   └── scene.gltf
+│       └── orb.glb (or similar)
+└── src
+    ├── main.js
+    ├── tracks.js
+    ├── style.css
+    └── ...
+```
 
 
 ## Core gameplay
